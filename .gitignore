@@ -99,3 +99,6 @@ ENV/
 
 # mypy
 .mypy_cache/
+
+# H5 data files shouldn't be added 
+*.h5
