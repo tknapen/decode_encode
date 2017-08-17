@@ -172,5 +172,9 @@ def get_figshare_data(localpath = 'data/V1.h5', remotepath='https://ndownloader.
         pass 
     else:
         print('downloading data from figshare: %s to: %s'%(remotepath, localpath))
+        try:
+            os.makedirs(os.path.split(localpath)[0])
+        except OSError:
+            pass
         urllib.request.urlretrieve(remotepath, localpath)
     return localpath
