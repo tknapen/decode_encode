@@ -34,9 +34,13 @@ from utils.css import CompressiveSpatialSummationModelFiltered
 #   parameters of the reconstructions
 ############################################################################################################################################
 
+# parameters of analysis
 extent=[-5, 5]
 stim_radius=5.0
 n_pix=100
+rsq_threshold = 0.3
+
+# settings that have to do with the data and experiment
 nr_prf_parameters = 8
 TR = 0.945
 screen_distance = 225
@@ -65,8 +69,12 @@ dm_n = h5file.get_node(
 dm = dm_n.dm.read()
 h5file.close()
 
+# voxel subselection, using the 'all' rsq values
+rsq_mask = all_prf_data[:,-1] > rsq_threshold
+
 ############################################################################################################################################
-#   setting up prf timecourses - NOTE, this is for the 'all' situation, so should be really done on a run-by-run basis: discussion material
+#   setting up prf timecourses - NOTE, this is for the 'all' situation, so should be really done on a run-by-run basis using a run's 
+#	loo data and prf parameters. A test set would then be taken from the single_run data as this hasn't been used for that run's fit.
 ############################################################################################################################################
 
 # set up model with hrf etc.
@@ -81,14 +89,14 @@ css_model = CompressiveSpatialSummationModelFiltered(stimulus, my_spmt)
 css_model.hrf_delay = 0
 
 # construct predicted signal timecourses in an ugly for loop
-# this already uses the standard hrf, so we don't have to convolve by hand
-prf_predictions = np.zeros((rfs.shape[-1],nr_TRs))
-for i, vox_prf_pars in enumerate(all_prf_data):
+# this already convolves with the standard hrf, so we don't have to convolve by hand
+prf_predictions = np.zeros((rsq_mask.sum(),nr_TRs))
+for i, vox_prf_pars in enumerate(all_prf_data[rsq_mask]):
     prf_predictions[i] = css_model.generate_prediction(
         x=vox_prf_pars[0], y=vox_prf_pars[1], sigma=vox_prf_pars[2], n=vox_prf_pars[3], beta=vox_prf_pars[4], baseline=vox_prf_pars[5])
 
 # and take the residuals of these with the actual data
-all_residuals = timecourse_data_all_psc - prf_predictions
+all_residuals = timecourse_data_all_psc[rsq_mask] - prf_predictions
 
 ############################################################################################################################################
 #   setting up prf spatial profiles for subsequent covariances, again for 'all' data. 
@@ -98,7 +106,7 @@ deg_x, deg_y = np.meshgrid(np.linspace(extent[0], extent[1], n_pix, endpoint=Tru
     extent[0], extent[1], n_pix, endpoint=True))
 
 rfs = generate_og_receptive_fields(
-    all_prf_data[:, 0], all_prf_data[:, 1], all_prf_data[:, 2], np.ones((all_prf_data.shape[0])), deg_x, deg_y)
+    all_prf_data[rsq_mask, 0], all_prf_data[rsq_mask, 1], all_prf_data[rsq_mask, 2], np.ones((rsq_mask.sum())), deg_x, deg_y)
 
 ############################################################################################################################################
 #   setting up covariances
@@ -106,7 +114,7 @@ rfs = generate_og_receptive_fields(
 
 stimulus_covariance = np.cov(rfs.reshape((-1,rfs.shape[-1])).T)
 all_residual_covariance = np.cov(all_residuals)
-all_residual_covariance_diagonal = np.eye(all_residual_covariance.shape) * all_residual_covariance # in-place multiplication
+all_residual_covariance_diagonal = np.eye(all_residual_covariance.shape[0]) * all_residual_covariance # in-place multiplication
 
 
 
