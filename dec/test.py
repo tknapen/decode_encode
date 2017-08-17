@@ -6,7 +6,7 @@ import numpy as np
 import tables
 import ctypes
 from popeye.spinach import generate_og_receptive_fields
-from popeye.css import CompressiveSpatialSummationModel
+# from popeye.css import CompressiveSpatialSummationModel
 from popeye.visual_stimulus import VisualStimulus
 from hrf_estimation.hrf import spmt
 from scipy.signal import savgol_filter, fftconvolve
@@ -16,6 +16,7 @@ import matplotlib.pyplot as pl
 # this duplicates that code, which is unhealthy but should be fine for now
 # in order to keep this repo self-contained.
 from utils.utils import roi_data_from_hdf, create_visual_designmatrix_all, get_figshare_data
+from utils.css import CompressiveSpatialSummationModelFiltered
 
 
 # indices into prf output array:
@@ -25,8 +26,8 @@ from utils.utils import roi_data_from_hdf, create_visual_designmatrix_all, get_f
 #	3:	n (nonlinearity power)
 #	4:	a (amplitude)
 #	5:	b (baseline, intercept value)
-#	6:	rsq
-#	7:	
+#	6:	rsq per-run
+#	7:	rsq across all
 #
 
 ############################################################################################################################################
@@ -41,6 +42,7 @@ TR = 0.945
 screen_distance = 225
 screen_width = 39
 nr_TRs = 462
+timepoints = np.arange(nr_TRs) * TR
 
 hdf5_file = get_figshare_data('data/V1.h5')
 
@@ -64,7 +66,32 @@ dm = dm_n.dm.read()
 h5file.close()
 
 ############################################################################################################################################
-#   setting up prfs
+#   setting up prf timecourses - NOTE, this is for the 'all' situation, so should be really done on a run-by-run basis: discussion material
+############################################################################################################################################
+
+# set up model with hrf etc.
+def my_spmt(delay, tr):
+    return spmt(np.arange(0, 33, tr))
+
+# we're going to use these popeye convenience functions 
+# because they are fast, and because they were used in the fitting procedure
+stimulus = VisualStimulus(
+    dm, screen_distance, screen_width, 1.0 / 3.0, TR, ctypes.c_int16)
+css_model = CompressiveSpatialSummationModelFiltered(stimulus, my_spmt)
+css_model.hrf_delay = 0
+
+# construct predicted signal timecourses in an ugly for loop
+# this already uses the standard hrf, so we don't have to convolve by hand
+prf_predictions = np.zeros((rfs.shape[-1],nr_TRs))
+for i, vox_prf_pars in enumerate(all_prf_data):
+    prf_predictions[i] = css_model.generate_prediction(
+        x=vox_prf_pars[0], y=vox_prf_pars[1], sigma=vox_prf_pars[2], n=vox_prf_pars[3], beta=vox_prf_pars[4], baseline=vox_prf_pars[5])
+
+# and take the residuals of these with the actual data
+all_residuals = timecourse_data_all_psc - prf_predictions
+
+############################################################################################################################################
+#   setting up prf spatial profiles for subsequent covariances, again for 'all' data. 
 ############################################################################################################################################
 
 deg_x, deg_y = np.meshgrid(np.linspace(extent[0], extent[1], n_pix, endpoint=True), np.linspace(
@@ -73,37 +100,13 @@ deg_x, deg_y = np.meshgrid(np.linspace(extent[0], extent[1], n_pix, endpoint=Tru
 rfs = generate_og_receptive_fields(
     all_prf_data[:, 0], all_prf_data[:, 1], all_prf_data[:, 2], np.ones((all_prf_data.shape[0])), deg_x, deg_y)
 
-# multiply by amplitude parameter
-rfs *= all_prf_data[:, 4]
-# raise to the n power
-rfs **= all_prf_data[:, 3]
-# add baseline offset : intercept
-rfs += all_prf_data[:, 5]
+############################################################################################################################################
+#   setting up covariances
+############################################################################################################################################
 
-# just a quick start for constructing the BOLD time-course
-timepoints = np.arange(nr_TRs) * TR
-
-# set up model with hrf etc.
-def my_spmt(delay, tr):
-    return spmt(np.arange(0, 33, tr))
-
-stimulus = VisualStimulus(
-    dm, screen_distance, screen_width, 1.0 / 3.0, TR, ctypes.c_int16)
-css_model = CompressiveSpatialSummationModel(stimulus, my_spmt)
-css_model.hrf_delay = 0
+stimulus_covariance = np.cov(rfs.reshape((-1,rfs.shape[-1])).T)
+all_residual_covariance = np.cov(all_residuals)
+all_residual_covariance_diagonal = np.eye(all_residual_covariance.shape) * all_residual_covariance # in-place multiplication
 
 
-prf_predictions = np.zeros((rfs.shape[-1],nr_TRs))
-for i, vox_prf_pars in enumerate(all_prf_data):
-    prf_predictions[i] = css_model.generate_prediction(
-        x=vox_prf_pars[0], y=vox_prf_pars[1], sigma=vox_prf_pars[2], n=vox_prf_pars[3], beta=vox_prf_pars[4], baseline=vox_prf_pars[5], hrf_delay=0)
 
-# example_voxel_index = np.argmax(all_prf_data[:, -1])
-# pl.figure()
-# pl.plot(timepoints, prf_predictions[example_voxel_index])
-# pl.plot(timepoints, timecourse_data_all_psc[example_voxel_index], 'ko', alpha=0.5, ms=5)
-
-# pl.figure()
-# pl.plot(timepoints, prf_predictions[example_voxel_index+1])
-# pl.plot(timepoints, timecourse_data_all_psc[example_voxel_index+1], 'ko', alpha=0.5, ms=5)
-# pl.show()
