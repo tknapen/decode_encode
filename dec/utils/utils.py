@@ -1,6 +1,8 @@
 from __future__ import division
 from math import *
 import numpy as np
+import urllib.request
+import os
 
 
 class PRFModelTrial(object):
@@ -162,3 +164,13 @@ def roi_data_from_hdf(data_types_wildcards, roi_name_wildcard, hdf5_file, folder
     h5file.close()
 
     return all_roi_data_np
+
+
+def get_figshare_data(localpath = 'data/V1.h5', remotepath='https://ndownloader.figshare.com/files/9120064'):
+    if os.path.isfile(localpath):
+        print('data file found, returning local file %s'%localpath)
+        pass 
+    else:
+        print('downloading data from figshare: %s to: %s'%(remotepath, localpath))
+        urllib.request.urlretrieve(remotepath, localpath)
+    return localpath
