@@ -3,6 +3,7 @@
 ############################################################################################################################################
 
 import numpy as np
+import scipy as sp
 import tables
 import ctypes
 from popeye.spinach import generate_og_receptive_fields
@@ -112,9 +113,28 @@ rfs = generate_og_receptive_fields(
 #   setting up covariances
 ############################################################################################################################################
 
-stimulus_covariance = np.cov(rfs.reshape((-1,rfs.shape[-1])).T)
+stimulus_covariance = np.cov(rfs.reshape((-1,rfs.shape[-1])).T) 
+stimulus_covariance2 = np.dot(rfs.reshape((-1,rfs.shape[-1])).T,rfs.reshape((-1,rfs.shape[-1])))
+
 all_residual_covariance = np.cov(all_residuals)
 all_residual_covariance_diagonal = np.eye(all_residual_covariance.shape[0]) * all_residual_covariance # in-place multiplication
 
 
+############################################################################################################################################
+#   Defining the distance between residual covariance and model covariance following van Bergen et al. 2015
+#   This function is defined to be minimized according to the scipy.optimize.minimize syntax. 
+#   Takes as argument
+#   x: one dimensional vector of length 2+#voxels, the parameters to be optimized. (rho,sigma,tau vector)
+#   omega: matrix of size #voxels x #voxels. This is the covariance matrix estimated from the data
+#   W_matrix: matrix of size #voxels x #voxels. This is the matrix product between the weight matrix and its own transpose
+#   (the weight matrix (fitted receptive fields here) has size #pixels x #voxels)    
+############################################################################################################################################
+x0=0.5+np.zeros(all_residual_covariance.shape[0]+2)
+bnds = [(0,1) for xs in x0]
+def f(x, omega, W_matrix):
+    rho=x[0]
+    sigma=x[1]
+    tau_matrix = np.outer(x[2:],x[2:])
+    return np.sum(np.square(omega-rho*tau_matrix-(1-rho)*np.multiply(np.identity(omega.shape[0]),tau_matrix)-sigma**2*W_matrix))
 
+result=sp.optimize.minimize(f, x0, args=(all_residual_covariance,stimulus_covariance2), method='TNC', bounds=bnds,tol=1e-02)

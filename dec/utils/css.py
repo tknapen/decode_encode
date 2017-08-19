@@ -14,7 +14,7 @@ from popeye.onetime import auto_attr
 import popeye.utilities as utils
 from popeye.base import PopulationModel, PopulationFit
 from popeye.spinach import generate_og_receptive_field, generate_rf_timeseries_nomask
-from popeye.css_nohrf import CompressiveSpatialSummationModel
+from popeye.css import CompressiveSpatialSummationModel
 
 
 class CompressiveSpatialSummationModelFiltered(CompressiveSpatialSummationModel):
