@@ -113,7 +113,8 @@ rfs = generate_og_receptive_fields(
 #   setting up covariances
 ############################################################################################################################################
 
-stimulus_covariance = np.cov(rfs.reshape((-1,rfs.shape[-1])).T) 
+stimulus_covariance = np.cov(rfs.reshape((-1,rfs.shape[-1])).T)
+#this is W*W.T=W_matrix. note that W is not rfs, but it is rfs recast in shape and transposed
 stimulus_covariance2 = np.dot(rfs.reshape((-1,rfs.shape[-1])).T,rfs.reshape((-1,rfs.shape[-1])))
 
 all_residual_covariance = np.cov(all_residuals)
@@ -121,7 +122,8 @@ all_residual_covariance_diagonal = np.eye(all_residual_covariance.shape[0]) * al
 
 
 ############################################################################################################################################
-#   Defining the distance between residual covariance and model covariance following van Bergen et al. 2015
+#   Defining the distance function between residual covariance and model covariance following van Bergen et al. 2015
+#   The model covariance here has terms for voxel-unique noise; shared noise; feature-space noise.
 #   This function is defined to be minimized according to the scipy.optimize.minimize syntax. 
 #   Takes as argument
 #   x: one dimensional vector of length 2+#voxels, the parameters to be optimized. (rho,sigma,tau vector)
@@ -129,12 +131,74 @@ all_residual_covariance_diagonal = np.eye(all_residual_covariance.shape[0]) * al
 #   W_matrix: matrix of size #voxels x #voxels. This is the matrix product between the weight matrix and its own transpose
 #   (the weight matrix (fitted receptive fields here) has size #pixels x #voxels)    
 ############################################################################################################################################
+
+#initial guess and boundaries
 x0=0.5+np.zeros(all_residual_covariance.shape[0]+2)
 bnds = [(0,1) for xs in x0]
-def f(x, omega, W_matrix):
+def f(x, residual_covariance, W_matrix):
     rho=x[0]
     sigma=x[1]
+    #tried to use the all_residual_covariance as tau_matrix: optimization fails (maybe use it as initial values for search)
+    #tried to use stimulus_covariance as W_matrix: search was interrupted as it becomes several order of magnitudes slower.
     tau_matrix = np.outer(x[2:],x[2:])
-    return np.sum(np.square(omega-rho*tau_matrix-(1-rho)*np.multiply(np.identity(omega.shape[0]),tau_matrix)-sigma**2*W_matrix))
+    return np.sum(np.square(residual_covariance-rho*tau_matrix-(1-rho)*np.multiply(np.identity(residual_covariance.shape[0]),tau_matrix)-sigma**2*W_matrix))
 
-result=sp.optimize.minimize(f, x0, args=(all_residual_covariance,stimulus_covariance2), method='TNC', bounds=bnds,tol=1e-02)
+#minimize distance between model covariance and observed covariance with low precision due to computational bounds
+result=sp.optimize.minimize(f, x0, args=(all_residual_covariance,stimulus_covariance2), method='TNC', bounds=bnds,tol=1e-03,options={'disp':True})
+
+#extract model covariance parameters and build omega
+estimated_tau_matrix=np.outer(result.x[2:],result.x[2:])
+estimated_rho=result.x[0]
+estimated_sigma=result.x[1]
+model_omega=estimated_rho*estimated_tau_matrix+(1-estimated_rho)*np.multiply(np.identity(estimated_tau_matrix.shape[0]),estimated_tau_matrix)+estimated_sigma**2*stimulus_covariance2
+
+#(hopefully) Major problem identified here:
+#How good is the result? not good, it seems that the matrices are quite dissimilar (even optimal distance is very large)
+np.sum(np.square(all_residual_covariance-model_omega))
+#The first test-optimization of parameters was done with a very rough 0.01 precision (distance ~7*10^5)
+#0.001 precision increased computational time and reduced distance (now ~6*10^5)
+#0.0001 and higher precision: tbd on server
+
+#Some sanity checks. 
+#Notice that determinants of data covariance and model covariance are extremely small, need to take log to make them manageable
+#the 2pi is for normalization in the multivariate gaussian
+np.linalg.slogdet(2*np.pi*all_residual_covariance)
+np.linalg.slogdet(2*np.pi*model_omega)
+#having a look at a sample for the term in the gaussian exponent. Omega inverse as expected has very large entries
+#model might still work with a good estimate of omega
+omega_inv=np.linalg.inv(model_omega) 
+np.dot(all_residuals[:,1],np.dot(omega_inv,all_residuals[:,1]))
+
+############################################################################################################################################
+#   This function calculates the probability of a hypothetical bold pattern, given some stimulus expressed pixel by pixel.
+#   The entire model is captured by the receptive fields and the model covariance matrix (omega) which depends on rho,sigma,taus)
+#   If instead the bold is measured and the stimulus is hypothetical, the value returned by this function
+#   is proportional to the posterior probability of that stimulus having produced the observed bold response.
+#   up to a normalization constant.
+#   Calculate log-likelihood (logp) instead of p to deal with extremely small/large values.
+############################################################################################################################################
+
+def calculate_bold_loglikelihood(bold,omega,rfs,stimulus):
+    logdet=np.linalg.slogdet(2*np.pi*omega)
+    if logdet[0]!=1.0:
+        print('Error: model covariance has negative or zero determinant')
+        return
+    const=-0.5*logdet[1]
+    W=rfs.reshape((-1,rfs.shape[-1])).T
+    linear_predictor=np.dot(W,np.ravel(stimulus))
+    resid=bold-linear_predictor
+    log_likelihood=const-0.5*np.dot(resid,np.dot(np.linalg.inv(omega),resid))
+    return log_likelihood
+
+#Sanity check:
+#Try to get the probability of the actually bold observed pattern as a function of the actual stimulus. Should be trivially close to one if the model works
+#The result is not good at all. Try again with a decently accurate estimate of omega and see what happens    
+p=np.zeros(462)
+for k in range(462):    
+    logl=calculate_bold_loglikelihood(timecourse_data_all_psc[rsq_mask,k],model_omega,rfs,dm[:,:,k])    
+    p[k]=np.exp(logl)
+    
+#next: "smart" function to optimize the posterior. (hierarchical prior? flip-and-keep with continuous values? flip-and-keep +proximity-biased search?)
+#problem: finding the normalization constant would require 2^(n_pixels) calculations, which is not feasible.
+#Perhaps choose a different approach i.e. define receptive fields that cover the screen      
+            
