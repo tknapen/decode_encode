@@ -99,6 +99,7 @@ for i, vox_prf_pars in enumerate(all_prf_data[rsq_mask]):
 # and take the residuals of these with the actual data
 all_residuals = timecourse_data_all_psc[rsq_mask] - prf_predictions
 
+
 ############################################################################################################################################
 #   setting up prf spatial profiles for subsequent covariances, again for 'all' data. 
 ############################################################################################################################################
@@ -113,12 +114,23 @@ rfs = generate_og_receptive_fields(
 #   setting up covariances
 ############################################################################################################################################
 
-stimulus_covariance = np.cov(rfs.reshape((-1,rfs.shape[-1])).T)
+#residuals for the actually linear model (weights*stimulus) (doesn't work)
+#all_residuals2=timecourse_data_all_psc[rsq_mask]-np.dot(rfs.reshape((-1,rfs.shape[-1])).T,dm.reshape((-1,dm.shape[-1])))
+
+#this does not work
+#stimulus_covariance = np.cov(rfs.reshape((-1,rfs.shape[-1])).T)
 #this is W*W.T=W_matrix. note that W is not rfs, but it is rfs recast in shape and transposed
+#this matrix has information on how much the receptive fields of any two voxels overlap. this sort of works
 stimulus_covariance2 = np.dot(rfs.reshape((-1,rfs.shape[-1])).T,rfs.reshape((-1,rfs.shape[-1])))
+#normalized attempt, did not work
+#stimulus_covariance3 = np.corrcoef(rfs.reshape((-1,rfs.shape[-1])).T)
+
+
 
 all_residual_covariance = np.cov(all_residuals)
-all_residual_covariance_diagonal = np.eye(all_residual_covariance.shape[0]) * all_residual_covariance # in-place multiplication
+#initializing tau guess from variance does not help
+#all_residual_variance = np.var(all_residuals, axis=1)
+#all_residual_covariance_diagonal = np.eye(all_residual_covariance.shape[0]) * all_residual_covariance # in-place multiplication
 
 
 ############################################################################################################################################
@@ -133,41 +145,74 @@ all_residual_covariance_diagonal = np.eye(all_residual_covariance.shape[0]) * al
 ############################################################################################################################################
 
 #initial guess and boundaries
-x0=0.5+np.zeros(all_residual_covariance.shape[0]+2)
-bnds = [(0,1) for xs in x0]
+#number of minimization attempts initial guesses
+initial_guesses=2
+
+x0=np.zeros((all_residual_covariance.shape[0]+2,initial_guesses))+0.5
+#none of these work very well
+#x0[:,1]=np.random.rand(x0.shape[0])
+#x0[:,2]=5*np.random.rand(x0.shape[0])
+#x0[:,3]=10*np.random.rand(x0.shape[0])
+
+#stuiable start values determined experimentally
+for s in range(x0.shape[1]):
+    x0[1,s]=0.025
+    x0[0,s]=0.5
+
+#load the result of the previous minimization    
+x0[:,0]=np.load("outfile.npy")
+
+#suitable boundaries determined experimenally    
+bnds = [(-5,15) for xs in x0[:,0]]
+bnds[0]=(0,1)
+bnds[1]=(0,1)
 def f(x, residual_covariance, W_matrix):
     rho=x[0]
     sigma=x[1]
-    #tried to use the all_residual_covariance as tau_matrix: optimization fails (maybe use it as initial values for search)
+    #tried to use the all_residual_covariance as tau_matrix: optimization fails (maybe use it as initial values for search. tried & failed)
     #tried to use stimulus_covariance as W_matrix: search was interrupted as it becomes several order of magnitudes slower.
     tau_matrix = np.outer(x[2:],x[2:])
     return np.sum(np.square(residual_covariance-rho*tau_matrix-(1-rho)*np.multiply(np.identity(residual_covariance.shape[0]),tau_matrix)-sigma**2*W_matrix))
 
-#minimize distance between model covariance and observed covariance with low precision due to computational bounds
-result=sp.optimize.minimize(f, x0, args=(all_residual_covariance,stimulus_covariance2), method='TNC', bounds=bnds,tol=1e-03,options={'disp':True})
+#minimize distance between model covariance and observed covariance
+#This routine allows computation starting from multiple different initial conditions, in an attempt to avoid local minima
+best_fun=0
+for k in range(x0.shape[1]-1):
+    result=sp.optimize.minimize(f, x0[:,k], args=(all_residual_covariance,stimulus_covariance2), method='TNC', bounds=bnds,tol=1e-02,options={'disp':True})
+    if k==0:
+        best_fun=result.fun
+    if result.fun <= best_fun:
+        best_fun=result.fun
+        best_result=result
+        
+better_result=sp.optimize.minimize(f, best_result.x, args=(all_residual_covariance,stimulus_covariance2), method='L-BFGS-B', bounds=bnds,options={'disp':True,'maxfun': 15000000, 'factr': 10})
 
 #extract model covariance parameters and build omega
-estimated_tau_matrix=np.outer(result.x[2:],result.x[2:])
-estimated_rho=result.x[0]
-estimated_sigma=result.x[1]
+estimated_tau_matrix=np.outer(better_result.x[2:],better_result.x[2:])
+estimated_rho=better_result.x[0]
+estimated_sigma=better_result.x[1]
+
+#print some details about omega for inspection and save
+print(str(np.max(better_result.x[2:]))+" "+str(np.min(better_result.x[2:])))
+print(str(estimated_sigma)+" "+str(estimated_rho))
+np.save("outfile",better_result.x)
 model_omega=estimated_rho*estimated_tau_matrix+(1-estimated_rho)*np.multiply(np.identity(estimated_tau_matrix.shape[0]),estimated_tau_matrix)+estimated_sigma**2*stimulus_covariance2
 
-#(hopefully) Major problem identified here:
-#How good is the result? not good, it seems that the matrices are quite dissimilar (even optimal distance is very large)
+
+#How good is the result?
 np.sum(np.square(all_residual_covariance-model_omega))
 #The first test-optimization of parameters was done with a very rough 0.01 precision (distance ~7*10^5)
 #0.001 precision increased computational time and reduced distance (now ~6*10^5)
-#0.0001 and higher precision: tbd on server
+#on server: ~3.9*10^5
 
 #Some sanity checks. 
 #Notice that determinants of data covariance and model covariance are extremely small, need to take log to make them manageable
-#the 2pi is for normalization in the multivariate gaussian
-np.linalg.slogdet(2*np.pi*all_residual_covariance)
-np.linalg.slogdet(2*np.pi*model_omega)
+print(np.linalg.slogdet(all_residual_covariance))
+print(np.linalg.slogdet(model_omega))
 #having a look at a sample for the term in the gaussian exponent. Omega inverse as expected has very large entries
 #model might still work with a good estimate of omega
-omega_inv=np.linalg.inv(model_omega) 
-np.dot(all_residuals[:,1],np.dot(omega_inv,all_residuals[:,1]))
+#omega_inv=np.linalg.inv(model_omega) 
+#np.dot(all_residuals[:,1],np.dot(omega_inv,all_residuals[:,1]))
 
 ############################################################################################################################################
 #   This function calculates the probability of a hypothetical bold pattern, given some stimulus expressed pixel by pixel.
@@ -178,25 +223,35 @@ np.dot(all_residuals[:,1],np.dot(omega_inv,all_residuals[:,1]))
 #   Calculate log-likelihood (logp) instead of p to deal with extremely small/large values.
 ############################################################################################################################################
 
-def calculate_bold_loglikelihood(bold,omega,rfs,stimulus):
-    logdet=np.linalg.slogdet(2*np.pi*omega)
+def calculate_bold_loglikelihood(bold,omega,rfs,stimulus,tt):
+    logdet=np.linalg.slogdet(omega)
     if logdet[0]!=1.0:
         print('Error: model covariance has negative or zero determinant')
         return
-    const=-0.5*logdet[1]
+    const=-0.5*(logdet[1]+omega.shape[0]*np.log(2*np.pi))
     W=rfs.reshape((-1,rfs.shape[-1])).T
-    linear_predictor=np.dot(W,np.ravel(stimulus))
+    #important change: use the actual model prediction (prf_predictions contains the model predicted bold response for the given dm matrix. Could replace dm matrix with random
+    #stimuli as further test
+    
+    #important change here: until now, we were fitting the previous stuff on residuals from the "css" model and then trying to predict based on a simple
+    #linear model Weights*Stimulus. Upon inspection, css and simple models have different residuals wrt data so they are different in contrast to what I was told.
+    #I also tried to redo all fitting and testing with the simple linear model. did not work
+    linear_predictor=prf_predictions[:,tt] #np.dot(W,stimulus.reshape(W.shape[1]))
     resid=bold-linear_predictor
+  
     log_likelihood=const-0.5*np.dot(resid,np.dot(np.linalg.inv(omega),resid))
     return log_likelihood
 
 #Sanity check:
-#Try to get the probability of the actually bold observed pattern as a function of the actual stimulus. Should be trivially close to one if the model works
-#The result is not good at all. Try again with a decently accurate estimate of omega and see what happens    
+#pass!!
 p=np.zeros(462)
-for k in range(462):    
-    logl=calculate_bold_loglikelihood(timecourse_data_all_psc[rsq_mask,k],model_omega,rfs,dm[:,:,k])    
-    p[k]=np.exp(logl)
+for k in range(462):
+    #conceptually, we are calculating the log-likelihood of all stimuli in DM having caused the bold response observed at time 50    
+    logl=calculate_bold_loglikelihood(timecourse_data_all_psc[rsq_mask,50],model_omega,rfs,dm[:,:,k],k)
+    print(str(k)+" "+str(logl))    
+    #p[k]=np.exp(logl)
+ 
+#next: train on loo data and test on left-out. Ask Tomas for details on data setup & css model.
     
 #next: "smart" function to optimize the posterior. (hierarchical prior? flip-and-keep with continuous values? flip-and-keep +proximity-biased search?)
 #problem: finding the normalization constant would require 2^(n_pixels) calculations, which is not feasible.
