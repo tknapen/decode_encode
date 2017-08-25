@@ -10,7 +10,7 @@ from popeye.spinach import generate_og_receptive_fields
 # from popeye.css import CompressiveSpatialSummationModel
 from popeye.visual_stimulus import VisualStimulus
 from hrf_estimation.hrf import spmt
-from scipy.signal import savgol_filter, fftconvolve
+from scipy.signal import savgol_filter, fftconvolve, deconvolve
 import matplotlib.pyplot as pl
 
 # import taken from own nPRF package. 
@@ -49,6 +49,7 @@ screen_width = 39
 nr_TRs = 462
 timepoints = np.arange(nr_TRs) * TR
 
+
 hdf5_file = get_figshare_data('data/V1.h5')
 
 ############################################################################################################################################
@@ -56,12 +57,12 @@ hdf5_file = get_figshare_data('data/V1.h5')
 ############################################################################################################################################
 
 # timecourses are single-run psc data, either original or leave-one-out. 
-timecourse_data_single_run = roi_data_from_hdf(['*psc'],'rh.V1', hdf5_file,'psc').astype(np.float64)
-timecourse_data_loo = roi_data_from_hdf(['*loo'],'rh.V1', hdf5_file,'loo').astype(np.float64)
-timecourse_data_all_psc = roi_data_from_hdf(['*av'],'rh.V1', hdf5_file,'all_psc').astype(np.float64)
+timecourse_data_single_run = roi_data_from_hdf(['*psc'],'V1', hdf5_file,'psc').astype(np.float64)
+timecourse_data_loo = roi_data_from_hdf(['*loo'],'V1', hdf5_file,'loo').astype(np.float64)
+timecourse_data_all_psc = roi_data_from_hdf(['*av'],'V1', hdf5_file,'all_psc').astype(np.float64)
 # prfs are per-run, as fit using the loo data
-all_prf_data = roi_data_from_hdf(['*all'],'rh.V1', hdf5_file,'all_prf').astype(np.float64)
-prf_data = roi_data_from_hdf(['*all'],'rh.V1', hdf5_file,'prf').astype(np.float64).reshape((all_prf_data.shape[0], -1, all_prf_data.shape[-1]))
+all_prf_data = roi_data_from_hdf(['*all'],'V1', hdf5_file,'all_prf').astype(np.float64)
+prf_data = roi_data_from_hdf(['*all'],'V1', hdf5_file,'prf').astype(np.float64).reshape((all_prf_data.shape[0], -1, all_prf_data.shape[-1]))
 
 # get design matrix, could create new one from utils.utils.create_visual_designmatrix_all
 h5file = tables.open_file(hdf5_file, mode="r")
@@ -70,9 +71,12 @@ dm_n = h5file.get_node(
 dm = dm_n.dm.read()
 h5file.close()
 
+dm1=np.tile(dm,(1,1,5))
+
 # voxel subselection, using the 'all' rsq values
 rsq_mask = all_prf_data[:,-1] > rsq_threshold
 
+rsq_mask2 = np.mean(prf_data[:,:,-1], axis=1) > rsq_threshold
 ############################################################################################################################################
 #   setting up prf timecourses - NOTE, this is for the 'all' situation, so should be really done on a run-by-run basis using a run's 
 #	loo data and prf parameters. A test set would then be taken from the single_run data as this hasn't been used for that run's fit.
@@ -85,37 +89,86 @@ def my_spmt(delay, tr):
 # we're going to use these popeye convenience functions 
 # because they are fast, and because they were used in the fitting procedure
 stimulus = VisualStimulus(
-    dm, screen_distance, screen_width, 1.0 / 3.0, TR, ctypes.c_int16)
+    dm1, screen_distance, screen_width, 1.0 / 3.0, TR, ctypes.c_int16)
 css_model = CompressiveSpatialSummationModelFiltered(stimulus, my_spmt)
 css_model.hrf_delay = 0
 
 # construct predicted signal timecourses in an ugly for loop
 # this already convolves with the standard hrf, so we don't have to convolve by hand
+
+#outdated prediction for all data
 prf_predictions = np.zeros((rsq_mask.sum(),nr_TRs))
 for i, vox_prf_pars in enumerate(all_prf_data[rsq_mask]):
     prf_predictions[i] = css_model.generate_prediction(
         x=vox_prf_pars[0], y=vox_prf_pars[1], sigma=vox_prf_pars[2], n=vox_prf_pars[3], beta=vox_prf_pars[4], baseline=vox_prf_pars[5])
 
 # and take the residuals of these with the actual data
-all_residuals = timecourse_data_all_psc[rsq_mask] - prf_predictions
+
+#all_residuals = timecourse_data_all_psc[rsq_mask] - prf_predictions
 
 
 ############################################################################################################################################
-#   setting up prf spatial profiles for subsequent covariances, again for 'all' data. 
+#   setting up prf spatial profiles for subsequent covariances, now some per-run stuff was done
 ############################################################################################################################################
+i=0
+
 
 deg_x, deg_y = np.meshgrid(np.linspace(extent[0], extent[1], n_pix, endpoint=True), np.linspace(
     extent[0], extent[1], n_pix, endpoint=True))
 
-rfs = generate_og_receptive_fields(
-    all_prf_data[rsq_mask, 0], all_prf_data[rsq_mask, 1], all_prf_data[rsq_mask, 2], np.ones((rsq_mask.sum())), deg_x, deg_y)
+rfs = generate_og_receptive_fields(prf_data[rsq_mask2, i, 0], prf_data[rsq_mask2,i, 1], prf_data[rsq_mask2,i, 2], np.ones((rsq_mask2.sum())), deg_x, deg_y)
+
+#this step is used in the css model
+rfs /= ((2 * np.pi * prf_data[rsq_mask2,i, 2]**2) * 1 /np.diff(css_model.stimulus.deg_x0[0, 0:2])**2)
+
+
+#rfs **= prf_data[rsq_mask2,i, 3]
+#rfs *= prf_data[rsq_mask2,i, 4]
+#rfs += prf_data[rsq_mask2,i, 5]
 
 ############################################################################################################################################
 #   setting up covariances
 ############################################################################################################################################
 
 #residuals for the actually linear model (weights*stimulus) (doesn't work)
-#all_residuals2=timecourse_data_all_psc[rsq_mask]-np.dot(rfs.reshape((-1,rfs.shape[-1])).T,dm.reshape((-1,dm.shape[-1])))
+test_data = timecourse_data_single_run[rsq_mask2,nr_TRs*i:nr_TRs*(i+1)]
+
+train_data = np.delete(timecourse_data_single_run[rsq_mask2,:], np.s_[nr_TRs*i:nr_TRs*(i+1)], axis=1)
+
+prediction= np.dot(rfs.reshape((-1,rfs.shape[-1])).T,dm1.reshape((-1,dm1.shape[-1])))
+
+
+css_prediction=np.zeros((rsq_mask2.sum(),train_data.shape[1]))
+for g, vox_prf_pars in enumerate(prf_data[rsq_mask2,i]):
+    css_prediction[g] = css_model.generate_prediction(
+        x=vox_prf_pars[0], y=vox_prf_pars[1], sigma=vox_prf_pars[2], n=vox_prf_pars[3], beta=vox_prf_pars[4], baseline=vox_prf_pars[5])
+
+#could try to deconvolve bold to get neural response
+neural_response=np.copy(train_data)
+
+for time in range(prediction.shape[1]):
+    prediction[:,time] **= prf_data[rsq_mask2,i, 3]
+    #at this point (after power raising but before multiplication/subtraction) the css model convolves with hrf.
+    prediction[:,time] *= prf_data[rsq_mask2,i, 4]
+    prediction[:,time] += prf_data[rsq_mask2,i, 5]
+    #try to go in the opposite direction from bold to neural response
+    #neural_response[:,time] -= prf_data[rsq_mask2,i, 5]
+    #neural_response[:,time] /= prf_data[rsq_mask2,i, 4]
+    #neural_response[:,time] += savgol_filter(neural_response[:,time], window_length=css_model.sg_filter_window_length, polyorder=css_model.sg_filter_order,deriv=0, mode='nearest')
+    #neural_response[:,time] **= (1/prf_data[rsq_mask2,i, 3]) 
+
+
+all_residuals2=train_data-prediction
+all_residuals1=train_data-css_prediction
+
+hrf = css_model.hrf_model(css_model.hrf_delay, css_model.stimulus.tr_length)+0.001
+bold=deconvolve(neural_response[0],hrf)
+pl.plot(bold[1][:200])
+ 
+whatever=np.arange(train_data.shape[1])
+voxel_nr=100
+timesteps=200
+pl.plot(whatever[:timesteps], train_data[voxel_nr,:timesteps], 'k', whatever[:timesteps], prediction[voxel_nr,:timesteps], 'r', whatever[:timesteps], css_prediction[voxel_nr,:timesteps], 'b')
 
 #this does not work
 #stimulus_covariance = np.cov(rfs.reshape((-1,rfs.shape[-1])).T)
@@ -126,10 +179,11 @@ stimulus_covariance2 = np.dot(rfs.reshape((-1,rfs.shape[-1])).T,rfs.reshape((-1,
 #stimulus_covariance3 = np.corrcoef(rfs.reshape((-1,rfs.shape[-1])).T)
 
 
+#important: which residuals(==model) to use?
+all_residual_covariance = np.cov(all_residuals1)
 
-all_residual_covariance = np.cov(all_residuals)
 #initializing tau guess from variance does not help
-#all_residual_variance = np.var(all_residuals, axis=1)
+all_residual_variance = np.var(all_residuals1, axis=1)
 #all_residual_covariance_diagonal = np.eye(all_residual_covariance.shape[0]) * all_residual_covariance # in-place multiplication
 
 
@@ -148,7 +202,7 @@ all_residual_covariance = np.cov(all_residuals)
 #number of minimization attempts initial guesses
 initial_guesses=2
 
-x0=np.zeros((all_residual_covariance.shape[0]+2,initial_guesses))+0.5
+x0=np.zeros((all_residual_covariance.shape[0]+2,initial_guesses))+10
 #none of these work very well
 #x0[:,1]=np.random.rand(x0.shape[0])
 #x0[:,2]=5*np.random.rand(x0.shape[0])
@@ -160,12 +214,13 @@ for s in range(x0.shape[1]):
     x0[0,s]=0.5
 
 #load the result of the previous minimization    
-x0[:,0]=np.load("outfile.npy")
+#x0[:,0]=np.load("outfile.npy")
+x0[2:,0]=np.copy(all_residual_variance)    
 
 #suitable boundaries determined experimenally    
-bnds = [(-5,15) for xs in x0[:,0]]
+bnds = [(-1000,1000) for xs in x0[:,0]]
 bnds[0]=(0,1)
-bnds[1]=(0,1)
+#bnds[1]=(0,1)
 def f(x, residual_covariance, W_matrix):
     rho=x[0]
     sigma=x[1]
@@ -178,24 +233,26 @@ def f(x, residual_covariance, W_matrix):
 #This routine allows computation starting from multiple different initial conditions, in an attempt to avoid local minima
 best_fun=0
 for k in range(x0.shape[1]-1):
-    result=sp.optimize.minimize(f, x0[:,k], args=(all_residual_covariance,stimulus_covariance2), method='TNC', bounds=bnds,tol=1e-02,options={'disp':True})
+    result=sp.optimize.minimize(f, x0[:,k], args=(all_residual_covariance,stimulus_covariance2), method='TNC', bounds=bnds,tol=1e-01,options={'disp':True})
     if k==0:
         best_fun=result.fun
     if result.fun <= best_fun:
         best_fun=result.fun
         best_result=result
         
-better_result=sp.optimize.minimize(f, best_result.x, args=(all_residual_covariance,stimulus_covariance2), method='L-BFGS-B', bounds=bnds,options={'disp':True,'maxfun': 15000000, 'factr': 10})
+better_result=sp.optimize.minimize(f, best_result.x, args=(all_residual_covariance,stimulus_covariance2), method='L-BFGS-B', bounds=bnds,options={'disp':True,'maxfun': 15000000, 'factr': 100})
 
 #extract model covariance parameters and build omega
-estimated_tau_matrix=np.outer(better_result.x[2:],better_result.x[2:])
-estimated_rho=better_result.x[0]
-estimated_sigma=better_result.x[1]
+x=better_result['x']
+estimated_tau_matrix=np.outer(x[2:],x[2:])
+estimated_rho=x[0]
+estimated_sigma=x[1]
 
 #print some details about omega for inspection and save
-print(str(np.max(better_result.x[2:]))+" "+str(np.min(better_result.x[2:])))
+
+print(str(np.max(x[2:]))+" "+str(np.min(x[2:])))
 print(str(estimated_sigma)+" "+str(estimated_rho))
-np.save("outfile",better_result.x)
+np.save("outfile",x)
 model_omega=estimated_rho*estimated_tau_matrix+(1-estimated_rho)*np.multiply(np.identity(estimated_tau_matrix.shape[0]),estimated_tau_matrix)+estimated_sigma**2*stimulus_covariance2
 
 
@@ -223,7 +280,7 @@ print(np.linalg.slogdet(model_omega))
 #   Calculate log-likelihood (logp) instead of p to deal with extremely small/large values.
 ############################################################################################################################################
 
-def calculate_bold_loglikelihood(bold,omega,rfs,stimulus,tt):
+def calculate_bold_loglikelihood(bold,omega,rfs,stimulus):
     logdet=np.linalg.slogdet(omega)
     if logdet[0]!=1.0:
         print('Error: model covariance has negative or zero determinant')
@@ -236,7 +293,7 @@ def calculate_bold_loglikelihood(bold,omega,rfs,stimulus,tt):
     #important change here: until now, we were fitting the previous stuff on residuals from the "css" model and then trying to predict based on a simple
     #linear model Weights*Stimulus. Upon inspection, css and simple models have different residuals wrt data so they are different in contrast to what I was told.
     #I also tried to redo all fitting and testing with the simple linear model. did not work
-    linear_predictor=prf_predictions[:,tt] #np.dot(W,stimulus.reshape(W.shape[1]))
+    linear_predictor=np.dot(W,stimulus.reshape(W.shape[1]))
     resid=bold-linear_predictor
   
     log_likelihood=const-0.5*np.dot(resid,np.dot(np.linalg.inv(omega),resid))
@@ -244,14 +301,39 @@ def calculate_bold_loglikelihood(bold,omega,rfs,stimulus,tt):
 
 #Sanity check:
 #pass!!
-p=np.zeros(462)
-for k in range(462):
-    #conceptually, we are calculating the log-likelihood of all stimuli in DM having caused the bold response observed at time 50    
-    logl=calculate_bold_loglikelihood(timecourse_data_all_psc[rsq_mask,50],model_omega,rfs,dm[:,:,k],k)
-    print(str(k)+" "+str(logl))    
-    #p[k]=np.exp(logl)
- 
+vals=[55,120,160,220,255,326,360,427]
+maxpostindex=[]
+diff=[]
+p=np.zeros((462,len(vals)))
+for z in range(p.shape[1]):
+    for k in range(p.shape[0]):
+        #conceptually, we are calculating the log-likelihood of all stimuli in DM having caused the bold response observed at time 50    
+        logl=calculate_bold_loglikelihood(timecourse_data_all_psc[rsq_mask,vals[z]],model_omega,rfs,dm[:,:,k],k)
+        print(str(vals[z])+" "+str(k)+" "+str(logl))    
+        p[k,z]=logl
+    maxpostindex.append(np.argmax(p[:,z]))
+    diff.append(p[vals[z],z]-np.amax(p[:,z]))    
+    print("Time of highest posterior for stimulus presented at t="+str(vals[z])+": "+str(np.argmax(p[:,z])))
+    print("Difference between exact stimulus posterior and max: "+str(diff[z]))
 #next: train on loo data and test on left-out. Ask Tomas for details on data setup & css model.
+attempts=100000
+#ask tomas how to make css prediction on random matrix
+dm2=np.zeros((100,100))
+for t in range(test_data.shape[1]):
+    baseline=calculate_bold_loglikelihood()
+    
+    
+vals2=np.arange(0,1,0.1)
+for stuff in dm2:
+    for trial in vals:
+        stuff=trial
+        logl=calculate_bold_loglikelihood(timecourse_data_all_psc[rsq_mask,360],model_omega,rfs,dm2,k??#need changes here
+
+    
+order=np.shuffle(np.arange())
+for t in range(attempts):   
+    a=int(100*np.random.rand())
+    b=int(100*np.random.rand())
     
 #next: "smart" function to optimize the posterior. (hierarchical prior? flip-and-keep with continuous values? flip-and-keep +proximity-biased search?)
 #problem: finding the normalization constant would require 2^(n_pixels) calculations, which is not feasible.
