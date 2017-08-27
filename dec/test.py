@@ -39,7 +39,7 @@ from utils.css import CompressiveSpatialSummationModelFiltered
 # parameters of analysis
 extent=[-5, 5]
 stim_radius=5.0
-n_pix=20
+n_pix=60
 rsq_threshold = 0.5
 
 # settings that have to do with the data and experiment
@@ -66,13 +66,13 @@ all_prf_data = roi_data_from_hdf(['*all'],'V1', hdf5_file,'all_prf').astype(np.f
 prf_data = roi_data_from_hdf(['*all'],'V1', hdf5_file,'prf').astype(np.float64).reshape((all_prf_data.shape[0], -1, all_prf_data.shape[-1]))
 
 # get design matrix, could create new one from utils.utils.create_visual_designmatrix_all
-h5file = tables.open_file(hdf5_file, mode="r")
-dm_n = h5file.get_node(
-                where='/', name='dm', classname='Group')
-dm = dm_n.dm.read()
-h5file.close()
+# h5file = tables.open_file(hdf5_file, mode="r")
+# dm_n = h5file.get_node(
+#                 where='/', name='dm', classname='Group')
+# dm = dm_n.dm.read()
+# h5file.close()
 
-dm=create_visual_designmatrix_all(n_pixels=20)
+dm=create_visual_designmatrix_all(n_pixels=n_pix)
 dm_crossv=np.tile(dm,(1,1,5))
 
 # voxel subselection, using the 'all' rsq values
@@ -122,7 +122,7 @@ deg_x, deg_y = np.meshgrid(np.linspace(extent[0], extent[1], n_pix, endpoint=Tru
 rfs = generate_og_receptive_fields(prf_data[rsq_mask_crossv, i, 0], prf_data[rsq_mask_crossv,i, 1], prf_data[rsq_mask_crossv,i, 2], np.ones((rsq_mask_crossv.sum())), deg_x, deg_y)
 
 #this step is used in the css model
-rfs /= ((2 * np.pi * prf_data[rsq_mask_crossv,i, 2]**2) * 1 /np.diff(css_model.stimulus.deg_x0[0, 0:2])**2)
+rfs /= ((2 * np.pi * prf_data[rsq_mask_crossv,i, 2]**2) * 1 /np.diff(css_model.stimulus.deg_x[0, 0:2])**2)
 
 
 #rfs **= prf_data[rsq_mask2,i, 3]
@@ -214,7 +214,7 @@ all_residual_covariance_berger = np.cov(all_residuals_berger)
 #pl.plot(np.ravel(all_residual_covariance),np.ravel(all_residual_covariance2),'ko',ms=1)
 
 #initializing tau guess from variance does not help
-#all_residual_variance_css = np.var(all_residuals_css, axis=1)
+all_residual_variance_css = np.var(all_residuals_css, axis=1)
 
 #old
 #all_residual_covariance_diagonal = np.eye(all_residual_covariance.shape[0]) * all_residual_covariance # in-place multiplication
@@ -247,10 +247,10 @@ for s in range(x0.shape[1]):
     x0[0,s]=0.5
 
 #or if possible load the result of the previous minimization    
-x0[:,0]=np.load("outfile.npy")
+# x0[:,0]=np.load("outfile.npy")
 
 #initializing from variance does not help
-#x0[2:,0]=np.copy(all_residual_variance_css)    
+x0[2:,0]=np.copy(all_residual_variance_css)    
 
 #suitable boundaries determined experimenally    
 bnds = [(-5,50) for xs in x0[:,0]]
@@ -379,14 +379,20 @@ for i in np.arange(n_pix):
         ff+=1
         
 #Select the data to decode. Not bad!
-start=340
-end=380
+start=0
+end=461
 test_data_decode=np.copy(test_data[:,start:end])
 #decode and plot
 dm_pixel_logl = np.zeros((n_pix,n_pix,test_data_decode.shape[1]))
 dm_pixel_logl_ratio = np.zeros((n_pix,n_pix,test_data_decode.shape[1]))    
 baseline=np.zeros(test_data_decode.shape[1]) 
 result_corrcoef=np.zeros(test_data_decode.shape[1])#-4) 
+
+# set up figure
+f = pl.figure(figsize=(6, 6))
+ims = []
+
+
 for t in range(test_data_decode.shape[1]):
     
     baseline[t]=calculate_bold_loglikelihood(test_data_decode[:,t],model_omega,rfs,dm_independent_pixels[:,:,0])
@@ -399,11 +405,24 @@ for t in range(test_data_decode.shape[1]):
             #dm_pixel_logl[i,j,t] = baseline/dm_pixel_logl[i,j,t]
             
     dm_pixel_logl_ratio[:,:,t]=baseline[t]/dm_pixel_logl[:,:,t]
-    pl.imshow(dm_pixel_logl_ratio[:,:,t])
-    pl.show()
-    pl.imshow(dm_crossv[:,:,start+t])
-    pl.show()
-      
+    # pl.imshow(dm_pixel_logl_ratio[:,:,t])
+    # pl.show()
+    # pl.imshow(dm_crossv[:,:,start+t])
+    # pl.show()
+
+    f.gca().add_patch(pl.Circle((0, 0), radius=5, facecolor='w',
+                                edgecolor='k', fill=False, linewidth=3.0))
+    im = pl.imshow(dm_pixel_logl_ratio[:,:,t], animated=True, clim=[dm_pixel_logl_ratio.min(
+    ), dm_pixel_logl_ratio.max()], cmap='viridis', alpha=0.95, extent=[-stim_radius, stim_radius, -stim_radius, stim_radius])
+    pl.axis('off')
+    ims.append([im])
+
+
+ani = animation.ArtistAnimation(
+    f, ims, interval=75, blit=True, repeat_delay=150)
+# writer=writer, , codec='hevc'
+ani.save('data/out.mp4', dpi=150, bitrate=1800)
+
 #correlation between decoded and actual image. If bold not deconvolved, need to account for hemodynamic delay
 delay=4            
 dm_roll=np.roll(dm_pixel_logl,delay,axis=2)            
