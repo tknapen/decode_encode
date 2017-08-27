@@ -102,3 +102,6 @@ ENV/
 
 # H5 data files shouldn't be added 
 *.h5
+
+# the .DSStore files on a mac
+.DS_Store
