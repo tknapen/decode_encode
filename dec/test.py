@@ -12,6 +12,7 @@ from popeye.visual_stimulus import VisualStimulus
 from hrf_estimation.hrf import spmt
 from scipy.signal import savgol_filter, fftconvolve, deconvolve
 import matplotlib.pyplot as pl
+import matplotlib.animation as animation
 
 
 # import taken from own nPRF package. 
