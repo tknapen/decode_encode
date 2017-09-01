@@ -13,6 +13,7 @@ from hrf_estimation.hrf import spmt
 from scipy.signal import savgol_filter, fftconvolve, deconvolve
 import matplotlib.pyplot as pl
 from matplotlib import animation
+import os
 
 
 # import taken from own nPRF package. 
@@ -114,6 +115,7 @@ css_model.hrf_delay = 0
 ############################################################################################################################################
 #   setting up prf spatial profiles for subsequent covariances, now some per-run stuff was done
 ############################################################################################################################################
+#use this number to choose which section to use in crossvalidate setup
 crossv=0
 
 
@@ -150,11 +152,11 @@ for g, vox_prf_pars in enumerate(prf_data[rsq_mask_crossv,crossv]):
 #could try to deconvolve bold to get neural response
 #neural_response=np.copy(train_data)
 
-for time in range(prediction.shape[1]):
-    prediction[:,time] **= prf_data[rsq_mask_crossv,crossv, 3]
+#for time in range(prediction.shape[1]):
+    #prediction[:,time] **= prf_data[rsq_mask_crossv,crossv, 3]
     #at this point (after power raising but before multiplication/subtraction) the css model convolves with hrf.
-    prediction[:,time] *= prf_data[rsq_mask_crossv,crossv, 4]
-    prediction[:,time] += prf_data[rsq_mask_crossv,crossv, 5]
+    #prediction[:,time] *= prf_data[rsq_mask_crossv,crossv, 4]
+    #prediction[:,time] += prf_data[rsq_mask_crossv,crossv, 5]
     #try to go in the opposite direction from bold to neural response
     #neural_response[:,time] -= prf_data[rsq_mask2,i, 5]
     #neural_response[:,time] /= prf_data[rsq_mask2,i, 4]
@@ -176,21 +178,21 @@ all_residuals_css=train_data-css_prediction #1-css
 #bold=deconvolve(neural_response[0],hrf)
 #pl.plot(bold[1][:200])
  
-#moiving average attempt to deconvolve boldsimilar to berger
-def moving_average(array):
-    new_array=np.zeros((array.shape[0],array.shape[1]))
-    for i in range(array.shape[1]-8):
-        new_array[:,i]=(array[:,i+4]+array[:,i+5]+array[:,i+6]+array[:,i+7]+array[:,i+8])/5#+array[:,i+7]+array[:,i+8])/7
-    new_array[:,-8:-1]=np.zeros((new_array.shape[0],7))    
-    return new_array  
-  
-berger_test_bold=moving_average(sp.stats.zscore(test_data, axis=1))
-pl.plot(berger_test_bold[0,:])
-pl.plot(test_data[0,:]) 
-pl.plot(prediction[0,:462],'k',berger_test_bold[0,:], 'r')
-pl.plot(test_data[0,:])
-pl.plot(css_prediction[0,:])
-pl.plot(prediction[0,:])
+########moiving average attempt to deconvolve boldsimilar to berger
+#def moving_average(array):
+#    new_array=np.zeros((array.shape[0],array.shape[1]))
+#    for i in range(array.shape[1]-8):
+#        new_array[:,i]=(array[:,i+4]+array[:,i+5]+array[:,i+6]+array[:,i+7]+array[:,i+8])/5#+array[:,i+7]+array[:,i+8])/7
+#    new_array[:,-8:-1]=np.zeros((new_array.shape[0],7))    
+#    return new_array  
+#  
+#berger_test_bold=moving_average(sp.stats.zscore(test_data, axis=1))
+#pl.plot(berger_test_bold[0,:])
+#pl.plot(test_data[0,:]) 
+#pl.plot(prediction[0,:462],'k',berger_test_bold[0,:], 'r')
+#pl.plot(test_data[0,:])
+#pl.plot(css_prediction[0,:])
+#pl.plot(prediction[0,:])
 
 #whatever=np.arange(train_data.shape[1])
 #voxel_nr=300
@@ -218,100 +220,104 @@ all_residual_covariance_css = np.cov(all_residuals_css) #allresidcovar-allresidc
 #pl.plot(np.ravel(all_residual_covariance),np.ravel(all_residual_covariance2),'ko',ms=1)
 
 #initializing tau guess from variance does not help
-all_residual_variance_css = np.var(all_residuals_css, axis=1)
+#all_residual_variance_css = np.var(all_residuals_css, axis=1)
 
 #old
 #all_residual_covariance_diagonal = np.eye(all_residual_covariance.shape[0]) * all_residual_covariance # in-place multiplication
 
 
 ############################################################################################################################################
-#   Defining the distance function between residual covariance and model covariance following van Bergen et al. 2015
+#   Defining the function to fit residual covariance and model covariance following van Bergen et al. 2015
 #   The model covariance here has terms for voxel-unique noise; shared noise; feature-space noise.
 #   This function is defined to be minimized according to the scipy.optimize.minimize syntax. 
 #   Takes as argument
-#   x: one dimensional vector of length 2+#voxels, the parameters to be optimized. (rho,sigma,tau vector)
-#   omega: matrix of size #voxels x #voxels. This is the covariance matrix estimated from the data
-#   W_matrix: matrix of size #voxels x #voxels. This is the matrix product between the weight matrix and its own transpose
-#   (the weight matrix (fitted receptive fields here) has size #pixels x #voxels)    
+#   observed_residual_covariance: (n_voxels,n_voxels) matrix. the observed covariance of residuals, to be calculated
+#   in advance, depending on the model used
+#   featurespace_covariance: that is W.dot(W.T) where W is a n_voxel * n_features matrix
+#   in our case is the receptive fields covariance
 ############################################################################################################################################
 
-#initial guess and boundaries
-#number of minimization attempts initial guesses
-initial_guesses=2
 
-x0=np.zeros((all_residual_covariance_css.shape[0]+2,initial_guesses))+0.5
-#none of these work very well
-#x0[:,1]=np.random.rand(x0.shape[0])
-#x0[:,2]=5*np.random.rand(x0.shape[0])
-#x0[:,3]=10*np.random.rand(x0.shape[0])
+def fit_model_omega(observed_residual_covariance, featurespace_covariance):
+    initial_guesses=2
 
-#suitable start values determined experimentally
-for s in range(x0.shape[1]):
-    x0[1,s]=0.025
-    x0[0,s]=0.5
+    x0=np.zeros((all_residual_covariance_css.shape[0]+2,initial_guesses))+0.5
+    #none of these work very well
+    x0[:,1]=10*np.random.rand(x0.shape[0])
+    #x0[:,2]=5*np.random.rand(x0.shape[0])
+    #x0[:,3]=10*np.random.rand(x0.shape[0])
+    
+   #or if possible load the result of the previous minimization
+    if os.path.isfile("outfile.npy"):    
+        x0[:,0]=np.load("outfile.npy")
 
-#or if possible load the result of the previous minimization    
-x0[:,0]=np.load("outfile.npy")
-
-#initializing from variance does not help
-#x0[2:,0]=np.copy(all_residual_variance_css)    
-
-#suitable boundaries determined experimenally    
-bnds = [(-5,50) for xs in x0[:,0]]
-bnds[0]=(0,1)
-#bnds[1]=(0,1)
-def f(x, residual_covariance, W_matrix):
-    rho=x[0]
-    sigma=x[1]
-    #tried to use the all_residual_covariance as tau_matrix: optimization fails (maybe use it as initial values for search. tried & failed)
-    #tried to use stimulus_covariance as W_matrix: search was interrupted as it becomes several order of magnitudes slower.
-    tau_matrix = np.outer(x[2:],x[2:])
-    return np.sum(np.square(residual_covariance-rho*tau_matrix-(1-rho)*np.multiply(np.identity(residual_covariance.shape[0]),tau_matrix)-sigma**2*W_matrix))
-
-#minimize distance between model covariance and observed covariance
-#This routine allows computation starting from multiple different initial conditions, in an attempt to avoid local minima
-best_fun=0
-for k in range(x0.shape[1]-1):
-    result=sp.optimize.minimize(f, x0[:,k], args=(all_residual_covariance_css,stimulus_covariance_WW), method='TNC', bounds=bnds,tol=1e-05,options={'disp':True})
-    if k==0:
-        best_fun=result.fun
-    if result.fun <= best_fun:
-        best_fun=result.fun
-        best_result=result
-        
-better_result=sp.optimize.minimize(f, best_result['x'], args=(all_residual_covariance_css,stimulus_covariance_WW), method='L-BFGS-B', bounds=bnds,options={'disp':True,'maxfun': 15000000, 'factr': 10})
-
-#x = np.load('outfile.npy')
-
-#extract model covariance parameters and build omega
-x=better_result.x#['x']
-estimated_tau_matrix=np.outer(x[2:],x[2:])
-estimated_rho=x[0]
-estimated_sigma=x[1]
-
-#print some details about omega for inspection and save
-
-print(str(np.max(x[2:]))+" "+str(np.min(x[2:])))
-print(str(estimated_sigma)+" "+str(estimated_rho))
-np.save("outfile",x)
-model_omega=estimated_rho*estimated_tau_matrix+(1-estimated_rho)*np.multiply(np.identity(estimated_tau_matrix.shape[0]),estimated_tau_matrix)+estimated_sigma**2*stimulus_covariance_WW
+    #initializing from variance does not help
+    #x0[2:,0]=np.copy(all_residual_variance_css)    
+    
+    #suitable boundaries determined experimenally    
+    bnds = [(-5,50) for xs in x0[:,0]]
+    bnds[0]=(0,1)
+    #bnds[1]=(0,1)
+    def f(x, residual_covariance, W_matrix):
+        rho=x[0]
+        sigma=x[1]
+        #tried to use the all_residual_covariance as tau_matrix: optimization fails (maybe use it as initial values for search. tried & failed)
+        #tried to use stimulus_covariance as W_matrix: search was interrupted as it becomes several order of magnitudes slower.
+        tau_matrix = np.outer(x[2:],x[2:])
+        return np.sum(np.square(residual_covariance-rho*tau_matrix-(1-rho)*np.multiply(np.identity(residual_covariance.shape[0]),tau_matrix)-sigma**2*W_matrix))
+    
+    #minimize distance between model covariance and observed covariance
+    #This routine allows computation starting from multiple different initial conditions, in an attempt to avoid local minima
+    best_fun=0
+    for k in range(x0.shape[1]-1):
+        result=sp.optimize.minimize(f, x0[:,k], args=(observed_residual_covariance,featurespace_covariance), method='L-BFGS-B', bounds=bnds,tol=1e-03,options={'disp':True})
+        if k==0:
+            best_fun=result.fun
+        if result.fun <= best_fun:
+            best_fun=result.fun
+            best_result=result
+            
+    better_result=sp.optimize.minimize(f, best_result['x'], args=(observed_residual_covariance,featurespace_covariance), method='L-BFGS-B', bounds=bnds,options={'disp':True,'maxfun': 15000000, 'factr': 10})
 
 
-#How good is the result?
-np.sum(np.square(all_residual_covariance_css-model_omega))
-#np.sum(np.square(all_residual_covariance_simple-model_omega))
+    #x = np.load('outfile.npy')
+    
+    #extract model covariance parameters and build omega
+    x=better_result.x#['x']
+    estimated_tau_matrix=np.outer(x[2:],x[2:])
+    estimated_rho=x[0]
+    estimated_sigma=x[1]
+    
+    #print some details about omega for inspection and save
+    
+    print("max tau: "+str(np.max(x[2:]))+" min tau: "+str(np.min(x[2:])))
+    print("sigma: "+str(estimated_sigma)+" rho: "+str(estimated_rho))
+    np.save("outfile",x)
+    model_omega=estimated_rho*estimated_tau_matrix+(1-estimated_rho)*np.multiply(np.identity(estimated_tau_matrix.shape[0]),estimated_tau_matrix)+estimated_sigma**2*stimulus_covariance_WW
+    
+    
+    #How good is the result?
+    print("summed squared distance: "+str(np.sum(np.square(all_residual_covariance_css-model_omega))))
+    #np.sum(np.square(all_residual_covariance_simple-model_omega))
+    
+    #The first test-optimization of parameters was done with a very rough 0.01 precision (distance ~7*10^5)
+    #0.001 precision increased computational time and reduced distance (now ~6*10^5)
+    #on server: ~3.9*10^5
+    
+    #Some sanity checks. 
+    #Notice that determinants of data covariance and model covariance are extremely small, need to take log to make them manageable
+    #print(np.linalg.slogdet(all_residual_covariance_css))
+    #print(np.linalg.slogdet(model_omega))
 
-#The first test-optimization of parameters was done with a very rough 0.01 precision (distance ~7*10^5)
-#0.001 precision increased computational time and reduced distance (now ~6*10^5)
-#on server: ~3.9*10^5
+    model_omega_inv = np.linalg.inv(model_omega)
+    logdet = np.linalg.slogdet(model_omega)
+    
+    return model_omega_inv, logdet
+    
+model_omega_inv,logdet_mo=fit_model_omega(all_residual_covariance_css, stimulus_covariance_WW)
 
-#Some sanity checks. 
-#Notice that determinants of data covariance and model covariance are extremely small, need to take log to make them manageable
-print(np.linalg.slogdet(all_residual_covariance_css))
-print(np.linalg.slogdet(model_omega))
 
-model_omega_inv = np.linalg.inv(model_omega)
-logdet_mo = np.linalg.slogdet(model_omega)
+
 #having a look at a sample for the term in the gaussian exponent. Omega inverse as expected has very large entries
 #model might still work with a good estimate of omega
 #omega_inv=np.linalg.inv(model_omega) 
@@ -439,12 +445,12 @@ start=0
 end=460
 test_data_decode=np.copy(test_data[:,start:end])
 #decode and plot
-dm_pixel_logl = np.zeros((n_pix,n_pix,test_data_decode.shape[1]))
+#dm_pixel_logl = np.zeros((n_pix,n_pix,test_data_decode.shape[1]))
 dm_pixel_logl_ratio = np.zeros((n_pix,n_pix,test_data_decode.shape[1]))  
 #dm_pixel_logl_ratio2 = np.zeros((n_pix,n_pix,test_data_decode.shape[1]))  
 
   
-baseline_=np.zeros(test_data_decode.shape[1]) 
+#baseline_=np.zeros(test_data_decode.shape[1]) 
 result_corrcoef=np.zeros(test_data_decode.shape[1])#-4) 
 
 # set up figure
@@ -468,8 +474,8 @@ for t in range(test_data_decode.shape[1]):
     pl.show()
 #    pl.imshow(dm_pixel_logl_ratio2[:,:,t])
 #    pl.show()
-    pl.imshow(dm_crossv[:,:,start+t])
-    pl.show()
+    #pl.imshow(dm_crossv[:,:,start+t])
+    #pl.show()
 
     f.gca().add_patch(pl.Circle((0, 0), radius=5, facecolor='w',
                                 edgecolor='k', fill=False, linewidth=3.0))
@@ -484,7 +490,7 @@ ani = animation.ArtistAnimation(
 # writer=writer, , codec='hevc'
 ani.save('data/out.mp4', dpi=150, bitrate=1800)
 
-#correlation between decoded and actual image. If bold not deconvolved, need to account for hemodynamic delay
+#try to calculate correlation between decoded and actual image. If bold not deconvolved, need to account for hemodynamic delay
 delay=-2            
 dm_roll=np.roll(np.flip(dm_pixel_logl_ratio,axis=1),delay,axis=2)            
 for i in np.arange(result_corrcoef.shape[0]):     
@@ -498,5 +504,5 @@ np.nanmean(result_corrcoef)
 #also look into whether it is possible to improve the omega fit, and whether deconvolving the bold helps.  
 #also: currently we do the first pass by taking ratio of baseline/logl because this value increases as
 #the pixel activation becomes more likely. But this is not the only way; could use difference instead of ratio
-#could use an absolute scale rather than a relative one; could use a cutoff; etc etc
+#could use an absolute scale rather than a relative one; could use a cutoff and discrete values; etc etc
             
