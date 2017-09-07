@@ -14,7 +14,7 @@ from scipy.signal import savgol_filter, fftconvolve, deconvolve
 import matplotlib.pyplot as pl
 from matplotlib import animation
 import os
-
+import itertools
 
 # import taken from own nPRF package. 
 # this duplicates that code, which is unhealthy but should be fine for now
@@ -40,8 +40,8 @@ from utils.css import CompressiveSpatialSummationModelFiltered
 
 # parameters of analysis
 extent=[-5, 5]
-stim_radius=5.0
-n_pix=40
+stim_radius=9.0
+n_pix=20
 rsq_threshold = 0.5
 
 # settings that have to do with the data and experiment
@@ -239,12 +239,12 @@ all_residual_covariance_css = np.cov(all_residuals_css) #allresidcovar-allresidc
 
 
 def fit_model_omega(observed_residual_covariance, featurespace_covariance):
-    initial_guesses=2
+    initial_guesses=3
 
     x0=np.zeros((all_residual_covariance_css.shape[0]+2,initial_guesses))+0.5
     #none of these work very well
     x0[:,1]=10*np.random.rand(x0.shape[0])
-    #x0[:,2]=5*np.random.rand(x0.shape[0])
+    x0[:,2]=20*np.random.rand(x0.shape[0])
     #x0[:,3]=10*np.random.rand(x0.shape[0])
     
    #or if possible load the result of the previous minimization
@@ -264,15 +264,19 @@ def fit_model_omega(observed_residual_covariance, featurespace_covariance):
         #tried to use the all_residual_covariance as tau_matrix: optimization fails (maybe use it as initial values for search. tried & failed)
         #tried to use stimulus_covariance as W_matrix: search was interrupted as it becomes several order of magnitudes slower.
         tau_matrix = np.outer(x[2:],x[2:])
-        return np.sum(np.square(residual_covariance-rho*tau_matrix-(1-rho)*np.multiply(np.identity(residual_covariance.shape[0]),tau_matrix)-sigma**2*W_matrix))
+        scaling_matrix=np.ones_like(tau_matrix)
+        np.fill_diagonal(scaling_matrix, 1/rho)
+        scaling_matrix*=rho
+        return np.sum(np.square(residual_covariance-scaling_matrix*tau_matrix-sigma**2*W_matrix))
     
     #minimize distance between model covariance and observed covariance
     #This routine allows computation starting from multiple different initial conditions, in an attempt to avoid local minima
     best_fun=0
-    for k in range(x0.shape[1]-1):
-        result=sp.optimize.minimize(f, x0[:,k], args=(observed_residual_covariance,featurespace_covariance), method='L-BFGS-B', bounds=bnds,tol=1e-03,options={'disp':True})
+    for k in range(x0.shape[1]):
+        result=sp.optimize.minimize(f, x0[:,k], args=(observed_residual_covariance,featurespace_covariance), method='L-BFGS-B', bounds=bnds,tol=1e-02,options={'disp':True})
         if k==0:
             best_fun=result.fun
+            best_result=result
         if result.fun <= best_fun:
             best_fun=result.fun
             best_result=result
@@ -317,6 +321,20 @@ def fit_model_omega(observed_residual_covariance, featurespace_covariance):
 model_omega_inv,logdet_mo=fit_model_omega(all_residual_covariance_css, stimulus_covariance_WW)
 
 
+def createCircularMask(h, w, center=None, radius=None):
+
+    if center is None: # use the middle of the image
+        center = [int(w/2), int(h/2)]
+    if radius is None: # use the smallest distance between the center and image walls
+        radius = min(center[0], center[1], w-center[0], h-center[1])
+
+    Y, X = np.ogrid[:h, :w]
+    dist_from_center = np.sqrt((X - center[0])**2 + (Y-center[1])**2)
+
+    mask = dist_from_center <= radius
+    return mask
+
+mask=createCircularMask(n_pix,n_pix,radius=stim_radius)
 
 #having a look at a sample for the term in the gaussian exponent. Omega inverse as expected has very large entries
 #model might still work with a good estimate of omega
@@ -332,7 +350,7 @@ model_omega_inv,logdet_mo=fit_model_omega(all_residual_covariance_css, stimulus_
 #   Calculate log-likelihood (logp) instead of p to deal with extremely small/large values.
 ############################################################################################################################################
 
-def calculate_bold_loglikelihood(bold,logdet,omega_inv,rfs,stimulus,prf_dataa):
+def calculate_bold_loglikelihood(stimulus,bold,logdet,omega_inv,rfs,prf_dataa):
     # logdet=np.linalg.slogdet(omega)
     if logdet[0]!=1.0:
         print('Error: model covariance has negative or zero determinant')
@@ -355,7 +373,23 @@ def calculate_bold_loglikelihood(bold,logdet,omega_inv,rfs,stimulus,prf_dataa):
     resid=bold-linear_predictor
   
     log_likelihood=const-0.5*np.dot(resid,np.dot(omega_inv,resid))
-    return log_likelihood
+    return -log_likelihood
+
+
+
+#simple function using Python built-in minimizer to get a more accurate reconstruction
+#ToDos: deconvolve bold? improve CSS model? different ways of obtaining final reconstruction?    
+def maximize_loglikelihood(starting_value,bold,logdet,omega_inv,rfs,prf_dataa):
+    mask2=np.ravel(mask)
+
+    bnds=[(0,1) if elem else (0,0) for elem in mask2]
+
+    final_result=sp.optimize.minimize(calculate_bold_loglikelihood, starting_value, args=(bold,logdet,omega_inv,rfs,prf_dataa), method='L-BFGS-B', bounds=bnds,tol=1e-01,options={'disp':True})
+    decoded_image=final_result.x
+    final_image=np.reshape(decoded_image,(rfs.shape[0],rfs.shape[1]))
+    logl=-final_result.fun
+    return logl, final_image
+
 
 #Wmat=rfs.reshape((-1,rfs.shape[-1])).T
 #linear_predictor=np.dot(W,np.ravel(dm_crossv[:,:,46]))
@@ -376,7 +410,6 @@ def calculate_bold_loglikelihood(bold,logdet,omega_inv,rfs,stimulus,prf_dataa):
 #    diff.append(p[vals[z],z]-np.amax(p[:,z]))    
 #    print("Time of highest posterior for stimulus presented at t="+str(vals[z])+": "+str(np.argmax(p[:,z])))
 #    print("Difference between exact stimulus posterior and max: "+str(diff[z]))
-
 
 
 #STEPS/REASONING FOR FAST FIRSTPASS DECODER FUNCTION
@@ -427,8 +460,11 @@ def firstpass_decoder_independent_pixels(bold,logdet,omega_inv,rfs,prf_dataa):
     log_likelihood_indep_pixels=const - 0.5 * (resid * omega_inv.dot(resid)).sum(0)
     baseline=log_likelihood_indep_pixels[0]
     firstpass_image=np.reshape(baseline/log_likelihood_indep_pixels[1:],(rfs.shape[0],rfs.shape[1]))
-    
-    return firstpass_image   
+    firstpass_image_normalized=(firstpass_image-np.min(firstpass_image[mask]))/(np.max(firstpass_image[mask])-np.min(firstpass_image[mask]))
+    #apply circular mask
+    firstpass_image_normalized[~mask]=0
+    return firstpass_image_normalized
+
 
 #np.shape(np.tile(prf_data[rsq_mask_crossv,crossv, 3], (901,1)).T) 
 #Create a matrix to test each pixel independently        
@@ -441,12 +477,18 @@ def firstpass_decoder_independent_pixels(bold,logdet,omega_inv,rfs,prf_dataa):
 #        ff+=1
 #        
 #Select the data to decode. Not bad!
+#################################################################################
+#   Later this section will be the test.py and eall functions above moved to other files
+#################################################################################
+
 start=0
 end=460
 test_data_decode=np.copy(test_data[:,start:end])
 #decode and plot
 #dm_pixel_logl = np.zeros((n_pix,n_pix,test_data_decode.shape[1]))
-dm_pixel_logl_ratio = np.zeros((n_pix,n_pix,test_data_decode.shape[1]))  
+dm_pixel_logl_ratio = np.zeros((n_pix,n_pix,test_data_decode.shape[1]))
+decoded_image = np.zeros((n_pix,n_pix,test_data_decode.shape[1]))  
+  
 #dm_pixel_logl_ratio2 = np.zeros((n_pix,n_pix,test_data_decode.shape[1]))  
 
   
@@ -454,7 +496,7 @@ dm_pixel_logl_ratio = np.zeros((n_pix,n_pix,test_data_decode.shape[1]))
 result_corrcoef=np.zeros(test_data_decode.shape[1])#-4) 
 
 # set up figure
-f = pl.figure(figsize=(6, 6))
+fig = pl.figure(figsize=(6, 6))
 ims = []
 
 
@@ -470,38 +512,44 @@ for t in range(test_data_decode.shape[1]):
 #            dm_pixel_logl_ratio2[i,j,t] = baseline_[t]/dm_pixel_logl[i,j,t]
 #            
     dm_pixel_logl_ratio[:,:,t]=firstpass_decoder_independent_pixels(test_data_decode[:,t],logdet_mo,model_omega_inv,rfs,prf_data)
-    pl.imshow(dm_pixel_logl_ratio[:,:,t])
+    logl, decoded_image[:,:,t]=maximize_loglikelihood(dm_pixel_logl_ratio[:,:,t],test_data_decode[:,t],logdet_mo,model_omega_inv,rfs,prf_data)
+    pl.imshow(dm_crossv[:,:,start+t])
     pl.show()
+    #pl.imshow(dm_pixel_logl_ratio[:,:,t])
+    #pl.show()
+    pl.imshow(decoded_image[:,:,t])
+    pl.show()
+    print(logl)
+
 #    pl.imshow(dm_pixel_logl_ratio2[:,:,t])
 #    pl.show()
-    #pl.imshow(dm_crossv[:,:,start+t])
-    #pl.show()
-
-    f.gca().add_patch(pl.Circle((0, 0), radius=5, facecolor='w',
+   
+    #the video animation is currently not working for me. not sure how to fix it
+    fig.gca().add_patch(pl.Circle((int(n_pix/2), int(n_pix/2)), radius=8, facecolor='w',
                                 edgecolor='k', fill=False, linewidth=3.0))
+    extentz=[int(n_pix/2)-stim_radius,int(n_pix/2)+stim_radius,int(n_pix/2)-stim_radius,int(n_pix/2)+stim_radius,]
     im = pl.imshow(dm_pixel_logl_ratio[:,:,t], animated=True, clim=[dm_pixel_logl_ratio.min(
-    ), dm_pixel_logl_ratio.max()], cmap='viridis', alpha=0.95, extent=[-stim_radius, stim_radius, -stim_radius, stim_radius])
+    ), dm_pixel_logl_ratio.max()], cmap='viridis', alpha=0.95)#, extent=extentz)
     pl.axis('off')
     ims.append([im])
 
 
 ani = animation.ArtistAnimation(
-    f, ims, interval=75, blit=True, repeat_delay=150)
+    fig, ims, interval=75, blit=True, repeat_delay=150)
 # writer=writer, , codec='hevc'
 ani.save('data/out.mp4', dpi=150, bitrate=1800)
 
 #try to calculate correlation between decoded and actual image. If bold not deconvolved, need to account for hemodynamic delay
-delay=-2            
+delay=-4            
 dm_roll=np.roll(np.flip(dm_pixel_logl_ratio,axis=1),delay,axis=2)            
 for i in np.arange(result_corrcoef.shape[0]):     
     result_corrcoef[i] = np.corrcoef(np.ravel(dm_roll[:,:,i]),np.ravel(dm_crossv[:,:,start+i]))[0,1]
 pl.plot(result_corrcoef)
 np.nanmean(result_corrcoef)    
 #next: "smart" function to optimize the posterior. (hierarchical prior? flip-and-keep with continuous values? flip-and-keep +proximity-biased search?)
-#problem: finding the normalization constant would require 2^(n_pixels) calculations, which is not feasible.
 #Perhaps choose a different approach i.e. define receptive fields that cover the screen  
-
-#also look into whether it is possible to improve the omega fit, and whether deconvolving the bold helps.  
+#is it possible to improve the CSS model itself?
+#also look into whether it is possible to improve the omega fit (other terms in the model), and whether deconvolving the bold helps.  
 #also: currently we do the first pass by taking ratio of baseline/logl because this value increases as
 #the pixel activation becomes more likely. But this is not the only way; could use difference instead of ratio
 #could use an absolute scale rather than a relative one; could use a cutoff and discrete values; etc etc
