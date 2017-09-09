@@ -12,21 +12,18 @@ from popeye.visual_stimulus import VisualStimulus
 from hrf_estimation.hrf import spmt
 from scipy.signal import savgol_filter, fftconvolve, deconvolve
 import matplotlib.pyplot as pl
-<<<<<<< HEAD
 import matplotlib.animation as animation
 
-=======
 from matplotlib import animation
 import os
 import itertools
->>>>>>> b18ee1a58c4a7554158cf732db0d8e5c4917d727
 
 # import taken from own nPRF package. 
 # this duplicates that code, which is unhealthy but should be fine for now
 # in order to keep this repo self-contained.
-from utils.utils import roi_data_from_hdf, create_visual_designmatrix_all, get_figshare_data
+from utils.utils import roi_data_from_hdf, create_visual_designmatrix_all, get_figshare_data, createCircularMask
 from utils.css import CompressiveSpatialSummationModelFiltered
-
+from fit import fit_model_omega, calculate_bold_loglikelihood, maximize_loglikelihood
 
 # indices into prf output array:
 #	0:	X
@@ -46,7 +43,7 @@ from utils.css import CompressiveSpatialSummationModelFiltered
 # parameters of analysis
 extent=[-5, 5]
 stim_radius=9.0
-n_pix=20
+n_pix=21
 rsq_threshold = 0.5
 
 # settings that have to do with the data and experiment
@@ -102,20 +99,6 @@ stimulus = VisualStimulus(
     dm_crossv, screen_distance, screen_width, 1.0 / 3.0, TR, ctypes.c_int16)
 css_model = CompressiveSpatialSummationModelFiltered(stimulus, my_spmt)
 css_model.hrf_delay = 0
-
-# construct predicted signal timecourses in an ugly for loop
-# this already convolves with the standard hrf, so we don't have to convolve by hand
-
-#outdated prediction for all data
-#prf_predictions = np.zeros((rsq_mask.sum(),nr_TRs))
-#for i, vox_prf_pars in enumerate(all_prf_data[rsq_mask]):
-#    prf_predictions[i] = css_model.generate_prediction(
-#        x=vox_prf_pars[0], y=vox_prf_pars[1], sigma=vox_prf_pars[2], n=vox_prf_pars[3], beta=vox_prf_pars[4], baseline=vox_prf_pars[5])
-
-# and take the residuals of these with the actual data
-
-#all_residuals = timecourse_data_all_psc[rsq_mask] - prf_predictions
-
 
 ############################################################################################################################################
 #   setting up prf spatial profiles for subsequent covariances, now some per-run stuff was done
@@ -231,169 +214,18 @@ all_residual_covariance_css = np.cov(all_residuals_css) #allresidcovar-allresidc
 #all_residual_covariance_diagonal = np.eye(all_residual_covariance.shape[0]) * all_residual_covariance # in-place multiplication
 
 
-############################################################################################################################################
-#   Defining the function to fit residual covariance and model covariance following van Bergen et al. 2015
-#   The model covariance here has terms for voxel-unique noise; shared noise; feature-space noise.
-#   This function is defined to be minimized according to the scipy.optimize.minimize syntax. 
-#   Takes as argument
-#   observed_residual_covariance: (n_voxels,n_voxels) matrix. the observed covariance of residuals, to be calculated
-#   in advance, depending on the model used
-#   featurespace_covariance: that is W.dot(W.T) where W is a n_voxel * n_features matrix
-#   in our case is the receptive fields covariance
-############################################################################################################################################
-
-
-def fit_model_omega(observed_residual_covariance, featurespace_covariance):
-    initial_guesses=3
-
-    x0=np.zeros((all_residual_covariance_css.shape[0]+2,initial_guesses))+0.5
-    #none of these work very well
-    x0[:,1]=10*np.random.rand(x0.shape[0])
-    x0[:,2]=20*np.random.rand(x0.shape[0])
-    #x0[:,3]=10*np.random.rand(x0.shape[0])
-    
-   #or if possible load the result of the previous minimization
-    if os.path.isfile("outfile.npy"):    
-        x0[:,0]=np.load("outfile.npy")
-
-    #initializing from variance does not help
-    #x0[2:,0]=np.copy(all_residual_variance_css)    
-    
-    #suitable boundaries determined experimenally    
-    bnds = [(-5,50) for xs in x0[:,0]]
-    bnds[0]=(0,1)
-    #bnds[1]=(0,1)
-    def f(x, residual_covariance, W_matrix):
-        rho=x[0]
-        sigma=x[1]
-        #tried to use the all_residual_covariance as tau_matrix: optimization fails (maybe use it as initial values for search. tried & failed)
-        #tried to use stimulus_covariance as W_matrix: search was interrupted as it becomes several order of magnitudes slower.
-        tau_matrix = np.outer(x[2:],x[2:])
-        scaling_matrix=np.ones_like(tau_matrix)
-        np.fill_diagonal(scaling_matrix, 1/rho)
-        scaling_matrix*=rho
-        return np.sum(np.square(residual_covariance-scaling_matrix*tau_matrix-sigma**2*W_matrix))
-    
-    #minimize distance between model covariance and observed covariance
-    #This routine allows computation starting from multiple different initial conditions, in an attempt to avoid local minima
-    best_fun=0
-    for k in range(x0.shape[1]):
-        result=sp.optimize.minimize(f, x0[:,k], args=(observed_residual_covariance,featurespace_covariance), method='L-BFGS-B', bounds=bnds,tol=1e-02,options={'disp':True})
-        if k==0:
-            best_fun=result.fun
-            best_result=result
-        if result.fun <= best_fun:
-            best_fun=result.fun
-            best_result=result
-            
-    better_result=sp.optimize.minimize(f, best_result['x'], args=(observed_residual_covariance,featurespace_covariance), method='L-BFGS-B', bounds=bnds,options={'disp':True,'maxfun': 15000000, 'factr': 10})
-
-
-    #x = np.load('outfile.npy')
-    
-    #extract model covariance parameters and build omega
-    x=better_result.x#['x']
-    estimated_tau_matrix=np.outer(x[2:],x[2:])
-    estimated_rho=x[0]
-    estimated_sigma=x[1]
-    
-    #print some details about omega for inspection and save
-    
-    print("max tau: "+str(np.max(x[2:]))+" min tau: "+str(np.min(x[2:])))
-    print("sigma: "+str(estimated_sigma)+" rho: "+str(estimated_rho))
-    np.save("outfile",x)
-    model_omega=estimated_rho*estimated_tau_matrix+(1-estimated_rho)*np.multiply(np.identity(estimated_tau_matrix.shape[0]),estimated_tau_matrix)+estimated_sigma**2*stimulus_covariance_WW
-    
-    
-    #How good is the result?
-    print("summed squared distance: "+str(np.sum(np.square(all_residual_covariance_css-model_omega))))
-    #np.sum(np.square(all_residual_covariance_simple-model_omega))
-    
-    #The first test-optimization of parameters was done with a very rough 0.01 precision (distance ~7*10^5)
-    #0.001 precision increased computational time and reduced distance (now ~6*10^5)
-    #on server: ~3.9*10^5
-    
-    #Some sanity checks. 
-    #Notice that determinants of data covariance and model covariance are extremely small, need to take log to make them manageable
-    #print(np.linalg.slogdet(all_residual_covariance_css))
-    #print(np.linalg.slogdet(model_omega))
-
-    model_omega_inv = np.linalg.inv(model_omega)
-    logdet = np.linalg.slogdet(model_omega)
-    
-    return model_omega_inv, logdet
     
 model_omega_inv,logdet_mo=fit_model_omega(all_residual_covariance_css, stimulus_covariance_WW)
 
 
-def createCircularMask(h, w, center=None, radius=None):
-
-    if center is None: # use the middle of the image
-        center = [int(w/2), int(h/2)]
-    if radius is None: # use the smallest distance between the center and image walls
-        radius = min(center[0], center[1], w-center[0], h-center[1])
-
-    Y, X = np.ogrid[:h, :w]
-    dist_from_center = np.sqrt((X - center[0])**2 + (Y-center[1])**2)
-
-    mask = dist_from_center <= radius
-    return mask
-
-mask=createCircularMask(n_pix,n_pix,radius=stim_radius)
+mask = createCircularMask(n_pix,n_pix,radius=stim_radius)
 
 #having a look at a sample for the term in the gaussian exponent. Omega inverse as expected has very large entries
 #model might still work with a good estimate of omega
 #omega_inv=np.linalg.inv(model_omega) 
 #np.dot(all_residuals[:,1],np.dot(omega_inv,all_residuals[:,1]))
 
-############################################################################################################################################
-#   This function calculates the probability of a hypothetical bold pattern, given some stimulus expressed pixel by pixel.
-#   The entire model is captured by the receptive fields and the model covariance matrix (omega) which depends on rho,sigma,taus)
-#   If instead the bold is measured and the stimulus is hypothetical, the value returned by this function
-#   is proportional to the posterior probability of that stimulus having produced the observed bold response.
-#   up to a normalization constant.
-#   Calculate log-likelihood (logp) instead of p to deal with extremely small/large values.
-############################################################################################################################################
 
-def calculate_bold_loglikelihood(stimulus,bold,logdet,omega_inv,rfs,prf_dataa):
-    # logdet=np.linalg.slogdet(omega)
-    if logdet[0]!=1.0:
-        print('Error: model covariance has negative or zero determinant')
-        return
-    const=-0.5*(logdet[1]+omega_inv.shape[0]*np.log(2*np.pi))
-    W=rfs.reshape((-1,rfs.shape[-1])).T
-    #important change: use the actual model prediction (prf_predictions contains the model predicted bold response for the given dm matrix. Could replace dm matrix with random
-    #stimuli as further test
-    
-    #important change here: until now, we were fitting the previous stuff on residuals from the "css" model and then trying to predict based on a simple
-    #linear model Weights*Stimulus. Upon inspection, css and simple models have different residuals wrt data so they are different in contrast to what I was told.
-    #I also tried to redo all fitting and testing with the simple linear model. did not work
-    linear_predictor=np.dot(W,np.ravel(stimulus))
-    #do some rescalings. This affects decoding quite a lot!
-    linear_predictor **= prf_dataa[rsq_mask_crossv,crossv, 3]
-    #at this point (after power raising but before multiplication/subtraction) the css model convolves with hrf.
-    linear_predictor *= prf_dataa[rsq_mask_crossv,crossv, 4]
-    linear_predictor += prf_dataa[rsq_mask_crossv,crossv, 5]
-    
-    resid=bold-linear_predictor
-  
-    log_likelihood=const-0.5*np.dot(resid,np.dot(omega_inv,resid))
-    return -log_likelihood
-
-
-
-#simple function using Python built-in minimizer to get a more accurate reconstruction
-#ToDos: deconvolve bold? improve CSS model? different ways of obtaining final reconstruction?    
-def maximize_loglikelihood(starting_value,bold,logdet,omega_inv,rfs,prf_dataa):
-    mask2=np.ravel(mask)
-
-    bnds=[(0,1) if elem else (0,0) for elem in mask2]
-
-    final_result=sp.optimize.minimize(calculate_bold_loglikelihood, starting_value, args=(bold,logdet,omega_inv,rfs,prf_dataa), method='L-BFGS-B', bounds=bnds,tol=1e-01,options={'disp':True})
-    decoded_image=final_result.x
-    final_image=np.reshape(decoded_image,(rfs.shape[0],rfs.shape[1]))
-    logl=-final_result.fun
-    return logl, final_image
 
 
 #Wmat=rfs.reshape((-1,rfs.shape[-1])).T
@@ -500,11 +332,6 @@ decoded_image = np.zeros((n_pix,n_pix,test_data_decode.shape[1]))
 #baseline_=np.zeros(test_data_decode.shape[1]) 
 result_corrcoef=np.zeros(test_data_decode.shape[1])#-4) 
 
-# set up figure
-fig = pl.figure(figsize=(6, 6))
-ims = []
-
-
 for t in range(test_data_decode.shape[1]):
     
 #    baseline_[t]=calculate_bold_loglikelihood(test_data_decode[:,t],logdet_mo,model_omega_inv,rfs,dm_independent_pixels[:,:,0],prf_data)
@@ -518,31 +345,44 @@ for t in range(test_data_decode.shape[1]):
 #            
     dm_pixel_logl_ratio[:,:,t]=firstpass_decoder_independent_pixels(test_data_decode[:,t],logdet_mo,model_omega_inv,rfs,prf_data)
     logl, decoded_image[:,:,t]=maximize_loglikelihood(dm_pixel_logl_ratio[:,:,t],test_data_decode[:,t],logdet_mo,model_omega_inv,rfs,prf_data)
-    pl.imshow(dm_crossv[:,:,start+t])
-    pl.show()
+    print(logl)
+    # pl.imshow(dm_crossv[:,:,start+t])
+    # pl.show()
     #pl.imshow(dm_pixel_logl_ratio[:,:,t])
     #pl.show()
-    pl.imshow(decoded_image[:,:,t])
-    pl.show()
-    print(logl)
+    # pl.imshow(decoded_image[:,:,t])
+    # pl.show()
 
 #    pl.imshow(dm_pixel_logl_ratio2[:,:,t])
 #    pl.show()
+
+# np.save(file='data/decoded_image',arr=decoded_image)
+# np.save(file='data/dm_pixel_logl_ratio',arr=dm_pixel_logl_ratio)
+
+decoded_image = np.load('data/decoded_image.npy')
+dm_pixel_logl_ratio = np.load('data/dm_pixel_logl_ratio.npy')
+
+# set up figure
+fig = pl.figure(figsize=(6, 6))
+ims = []
+
+for t in range(test_data_decode.shape[1]):
    
     #the video animation is currently not working for me. not sure how to fix it
-    fig.gca().add_patch(pl.Circle((int(n_pix/2), int(n_pix/2)), radius=8, facecolor='w',
-                                edgecolor='k', fill=False, linewidth=3.0))
+    # fig.gca().add_patch(pl.Circle((int(n_pix/2), int(n_pix/2)), radius=8, facecolor='w',
+    #                             edgecolor='k', fill=False, linewidth=3.0))
     extentz=[int(n_pix/2)-stim_radius,int(n_pix/2)+stim_radius,int(n_pix/2)-stim_radius,int(n_pix/2)+stim_radius,]
-    im = pl.imshow(dm_pixel_logl_ratio[:,:,t], animated=True, clim=[dm_pixel_logl_ratio.min(
-    ), dm_pixel_logl_ratio.max()], cmap='viridis', alpha=0.95)#, extent=extentz)
+    # im = pl.imshow(dm_pixel_logl_ratio[:,:,t], animated=True, clim=[dm_pixel_logl_ratio.min(
+    # ), dm_pixel_logl_ratio.max()], cmap='viridis', alpha=0.95)#, extent=extentz)    
+    im = pl.imshow(decoded_image[:,:,t], animated=True, clim=[decoded_image.min(
+    ), decoded_image.max()], cmap='viridis', alpha=0.95)#, extent=extentz)
     pl.axis('off')
     ims.append([im])
 
-
 ani = animation.ArtistAnimation(
-    fig, ims, interval=75, blit=True, repeat_delay=150)
+    fig, ims, interval=5, blit=True, repeat_delay=150)
 # writer=writer, , codec='hevc'
-ani.save('data/out.mp4', dpi=150, bitrate=1800)
+ani.save('data/out.mp4', dpi=150, bitrate=1800, codec='hevc')
 
 #try to calculate correlation between decoded and actual image. If bold not deconvolved, need to account for hemodynamic delay
 delay=-4            
