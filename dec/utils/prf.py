@@ -105,9 +105,11 @@ def setup_data_from_h5(data_file,
     #this step is used in the css model
     rfs /= ((2 * np.pi * prf_data[rsq_mask_crossv, cv_fold, 2]**2) * 1 /np.diff(css_model.stimulus.deg_x[0, 0:2])**2)
     
-    # scale the rfs according to 
-    
-    
+    # scale the rfs according to prf_cv_fold_data
+    # rfs **= prf_cv_fold_data[:, 3]
+    # rfs *= prf_cv_fold_data[:, 4]
+    # rfs += prf_cv_fold_data[:, 5]
+
     # convert to 1D array and mask with circular mask
     rfs = rfs.reshape((np.prod(mask.shape),-1))[mask.ravel(),:]
     ############################################################################################################################################

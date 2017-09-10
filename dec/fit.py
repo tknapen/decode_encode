@@ -31,7 +31,7 @@ def fit_model_omega(observed_residual_covariance, featurespace_covariance, infil
 
     
     #suitable boundaries determined experimenally    
-    bnds = [(-50,500) for xs in x0[:,0]]
+    bnds = [(-500,500) for xs in x0[:,0]]
     bnds[0]=(0,1)
     bnds[1]=(0,1)
     
