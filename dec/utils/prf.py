@@ -24,8 +24,7 @@ def setup_data_from_h5(data_file,
                         TR=0.945,
                         cv_fold=1,
                         n_folds=6):
-    
-
+        
     hdf5_file = get_figshare_data(data_file)
 
     ############################################################################################################################################
@@ -41,9 +40,12 @@ def setup_data_from_h5(data_file,
     prf_data = roi_data_from_hdf(['*all'],'V1', hdf5_file,'prf').astype(np.float64).reshape((all_prf_data.shape[0], -1, all_prf_data.shape[-1]))
 
     dm=create_visual_designmatrix_all(n_pixels=n_pix)
+    mask = dm.sum(axis = -1, dtype = bool)
+    # apply pixel mask to design matrix, as we also do this to the prf profiles.    
+    dm = dm[mask,:]
     dm_crossv=np.tile(dm,(1,1,n_folds-1))
-
-    #mask for crossvalidation
+    
+    # voxel mask for crossvalidation
     rsq_mask_crossv = np.mean(prf_data[:,:,-1], axis=1) > rsq_threshold
 
     # determine amount of trs
@@ -93,7 +95,7 @@ def setup_data_from_h5(data_file,
     deg_x, deg_y = np.meshgrid(np.linspace(extent[0], extent[1], n_pix, endpoint=True), np.linspace(
         extent[0], extent[1], n_pix, endpoint=True))
 
-    rfs = generate_og_receptive_fields(prf_data[rsq_mask_crossv, cv_fold, 0], 
+    rfs = generate_og_receptive_fields( prf_data[rsq_mask_crossv, cv_fold, 0], 
                                         prf_data[rsq_mask_crossv, cv_fold, 1], 
                                         prf_data[rsq_mask_crossv, cv_fold, 2], 
                                         np.ones((rsq_mask_crossv.sum())), 
@@ -102,13 +104,18 @@ def setup_data_from_h5(data_file,
 
     #this step is used in the css model
     rfs /= ((2 * np.pi * prf_data[rsq_mask_crossv, cv_fold, 2]**2) * 1 /np.diff(css_model.stimulus.deg_x[0, 0:2])**2)
-
+    
+    # scale the rfs according to 
+    
+    
+    # convert to 1D array and mask with circular mask
+    rfs = rfs.reshape((np.prod(mask.shape),-1))[mask.ravel(),:]
     ############################################################################################################################################
     #   setting up prf spatial profiles for the decoding step, creating linear_predictor
     ############################################################################################################################################
 
     # and then we try to use this:
-    W=rfs.reshape((-1,rfs.shape[-1])).T
+    W=rfs.T
     linear_predictor=np.zeros((W.shape[0], W.shape[1]+1))
     linear_predictor[:,1:]=np.copy(W)
     #do some rescalings. This affects decoding quite a lot!
@@ -121,7 +128,7 @@ def setup_data_from_h5(data_file,
     #   create covariances and stuff for omega fitting
     ############################################################################################################################################
 
-    prediction= np.dot(rfs.reshape((-1,rfs.shape[-1])).T,dm_crossv.reshape((-1,dm_crossv.shape[-1])))
+    prediction= np.dot(rfs.T,dm_crossv.reshape((-1,dm_crossv.shape[-1])))
 
     css_prediction=np.zeros((rsq_mask_crossv.sum(),train_data.shape[1]))
     for g, vox_prf_pars in enumerate(prf_data[rsq_mask_crossv,cv_fold]):
@@ -130,8 +137,8 @@ def setup_data_from_h5(data_file,
 
     all_residuals_css=train_data-css_prediction
 
-    stimulus_covariance_WW = np.dot(rfs.reshape((-1,rfs.shape[-1])).T,rfs.reshape((-1,rfs.shape[-1])))
+    stimulus_covariance_WW = np.dot(rfs.T,rfs)
     all_residual_covariance_css = np.cov(all_residuals_css) 
 
-    return prf_cv_fold_data, rfs, linear_predictor, all_residuals_css, all_residual_covariance_css, stimulus_covariance_WW, test_data
+    return prf_cv_fold_data, rfs, linear_predictor, all_residuals_css, all_residual_covariance_css, stimulus_covariance_WW, test_data, mask
 
