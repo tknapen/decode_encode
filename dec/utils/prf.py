@@ -165,7 +165,7 @@ def setup_data_from_h5(data_file,
     pl.plot(all_residuals_css[np.argmin(rsq_crossv[rsq_mask_crossv])], label='resid')
     pl.legend()
     
-    stimulus_covariance_WW = np.dot(cov_rfs.T,cov_rfs)
+    stimulus_covariance_WW = np.dot(rfs.T,rfs)
     all_residual_covariance_css = np.cov(all_residuals_css) 
 
     return prf_cv_fold_data, rfs, linear_predictor, all_residuals_css, all_residual_covariance_css, stimulus_covariance_WW, test_data, mask
