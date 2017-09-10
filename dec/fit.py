@@ -21,7 +21,7 @@ def fit_model_omega(observed_residual_covariance, featurespace_covariance, infil
         x0=np.load(infile)
         initial_guesses = 1
     else:   # initial guesses around Van Bergen values
-        initial_guesses = 4
+        initial_guesses = 2
         x0=np.zeros((observed_residual_covariance.shape[0]+2,initial_guesses))
         x0[0,:] = 0.1 # rho
         x0[1,:] = 0.3 # sigma
@@ -33,7 +33,7 @@ def fit_model_omega(observed_residual_covariance, featurespace_covariance, infil
     #suitable boundaries determined experimenally    
     bnds = [(-500,500) for xs in x0[:,0]]
     bnds[0]=(0,1)
-    bnds[1]=(0,1)
+    # bnds[1]=(0,1)
     
     def f(x, residual_covariance, W_matrix):
         rho=x[0]

@@ -2,6 +2,7 @@ import numpy as np
 import scipy as sp
 import tables
 import ctypes
+import matplotlib.pyplot as pl
 
 from hrf_estimation.hrf import spmt
 from scipy.signal import savgol_filter, fftconvolve, deconvolve
@@ -40,13 +41,15 @@ def setup_data_from_h5(data_file,
     prf_data = roi_data_from_hdf(['*all'],'V1', hdf5_file,'prf').astype(np.float64).reshape((all_prf_data.shape[0], -1, all_prf_data.shape[-1]))
 
     dm=create_visual_designmatrix_all(n_pixels=n_pix)
-    mask = dm.sum(axis = -1, dtype = bool)
-    # apply pixel mask to design matrix, as we also do this to the prf profiles.    
-    dm = dm[mask,:]
     dm_crossv=np.tile(dm,(1,1,n_folds-1))
+
+    # apply pixel mask to design matrix, as we also do this to the prf profiles.    
+    mask = dm.sum(axis = -1, dtype = bool)
+    dm = dm[mask,:]
     
     # voxel mask for crossvalidation
-    rsq_mask_crossv = np.mean(prf_data[:,:,-1], axis=1) > rsq_threshold
+    rsq_crossv = np.mean(prf_data[:,:,-1], axis=1)
+    rsq_mask_crossv = rsq_crossv > rsq_threshold
 
     # determine amount of trs
     nr_TRs = int(timecourse_data_single_run.shape[-1] / n_folds)
@@ -105,13 +108,16 @@ def setup_data_from_h5(data_file,
     #this step is used in the css model
     rfs /= ((2 * np.pi * prf_data[rsq_mask_crossv, cv_fold, 2]**2) * 1 /np.diff(css_model.stimulus.deg_x[0, 0:2])**2)
     
+    cov_rfs = np.copy(rfs)
     # scale the rfs according to prf_cv_fold_data
-    # rfs **= prf_cv_fold_data[:, 3]
-    # rfs *= prf_cv_fold_data[:, 4]
-    # rfs += prf_cv_fold_data[:, 5]
+    cov_rfs **= prf_cv_fold_data[:, 3]
+    cov_rfs *= prf_cv_fold_data[:, 4]
+    cov_rfs += prf_cv_fold_data[:, 5]
 
     # convert to 1D array and mask with circular mask
     rfs = rfs.reshape((np.prod(mask.shape),-1))[mask.ravel(),:]
+    cov_rfs = cov_rfs.reshape((np.prod(mask.shape),-1))[mask.ravel(),:]
+
     ############################################################################################################################################
     #   setting up prf spatial profiles for the decoding step, creating linear_predictor
     ############################################################################################################################################
@@ -130,16 +136,29 @@ def setup_data_from_h5(data_file,
     #   create covariances and stuff for omega fitting
     ############################################################################################################################################
 
-    prediction= np.dot(rfs.T,dm_crossv.reshape((-1,dm_crossv.shape[-1])))
+    prediction= np.dot(rfs.T,dm_crossv[mask])
 
     css_prediction=np.zeros((rsq_mask_crossv.sum(),train_data.shape[1]))
-    for g, vox_prf_pars in enumerate(prf_data[rsq_mask_crossv,cv_fold]):
+    for g, vox_prf_pars in enumerate(prf_cv_fold_data):
         css_prediction[g] = css_model.generate_prediction(
             x=vox_prf_pars[0], y=vox_prf_pars[1], sigma=vox_prf_pars[2], n=vox_prf_pars[3], beta=vox_prf_pars[4], baseline=vox_prf_pars[5])
 
-    all_residuals_css=train_data-css_prediction
-
-    stimulus_covariance_WW = np.dot(rfs.T,rfs)
+    all_residuals_css = train_data - css_prediction
+    
+    # some quick visualization
+    f = pl.figure(figsize=(17,5))
+    s = f.add_subplot(211)
+    pl.plot(css_prediction[np.argmax(rsq_crossv[rsq_mask_crossv])], label='prediction')
+    pl.plot(train_data[np.argmax(rsq_crossv[rsq_mask_crossv])], label='data')
+    pl.plot(all_residuals_css[np.argmax(rsq_crossv[rsq_mask_crossv])], label='resid')
+    pl.legend()
+    s = f.add_subplot(212)
+    pl.plot(css_prediction[np.argmin(rsq_crossv[rsq_mask_crossv])], label='prediction')
+    pl.plot(train_data[np.argmin(rsq_crossv[rsq_mask_crossv])], label='data')
+    pl.plot(all_residuals_css[np.argmin(rsq_crossv[rsq_mask_crossv])], label='resid')
+    pl.legend()
+    
+    stimulus_covariance_WW = np.dot(cov_rfs.T,cov_rfs)
     all_residual_covariance_css = np.cov(all_residuals_css) 
 
     return prf_cv_fold_data, rfs, linear_predictor, all_residuals_css, all_residual_covariance_css, stimulus_covariance_WW, test_data, mask
