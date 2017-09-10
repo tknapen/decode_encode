@@ -24,7 +24,8 @@ def setup_data_from_h5(data_file,
                         rsq_threshold=0.5,
                         TR=0.945,
                         cv_fold=1,
-                        n_folds=6):
+                        n_folds=6,
+                        use_median=True):
         
     hdf5_file = get_figshare_data(data_file)
 
@@ -41,7 +42,10 @@ def setup_data_from_h5(data_file,
     prf_data = roi_data_from_hdf(['*all'],'V1', hdf5_file,'prf').astype(np.float64).reshape((all_prf_data.shape[0], -1, all_prf_data.shape[-1]))
 
     dm=create_visual_designmatrix_all(n_pixels=n_pix)
-    dm_crossv=np.tile(dm,(1,1,n_folds-1))
+    if use_median:
+        dm_crossv = dm
+    else:
+        dm_crossv = np.tile(dm,(1,1,n_folds-1))
 
     # apply pixel mask to design matrix, as we also do this to the prf profiles.    
     mask = dm.sum(axis = -1, dtype = bool)
@@ -56,7 +60,10 @@ def setup_data_from_h5(data_file,
 
     # now, mask the data and select for this fold
     test_data = timecourse_data_single_run[rsq_mask_crossv,nr_TRs*cv_fold:nr_TRs*(cv_fold+1)]
-    train_data = np.delete(timecourse_data_single_run[rsq_mask_crossv,:], np.s_[nr_TRs*cv_fold:nr_TRs*(cv_fold+1)], axis=1)
+    if use_median:
+        train_data = timecourse_data_loo[rsq_mask_crossv,nr_TRs*cv_fold:nr_TRs*(cv_fold+1)]
+    else:
+        train_data = np.delete(timecourse_data_single_run[rsq_mask_crossv,:], np.s_[nr_TRs*cv_fold:nr_TRs*(cv_fold+1)], axis=1)
 
     # set up the prf_data variable needed for decoding
     prf_cv_fold_data = prf_data[rsq_mask_crossv,cv_fold]
@@ -104,15 +111,15 @@ def setup_data_from_h5(data_file,
                                         np.ones((rsq_mask_crossv.sum())), 
                                         deg_x, 
                                         deg_y)
-
-    #this step is used in the css model
-    rfs /= ((2 * np.pi * prf_data[rsq_mask_crossv, cv_fold, 2]**2) * 1 /np.diff(css_model.stimulus.deg_x[0, 0:2])**2)
     
     cov_rfs = np.copy(rfs)
     # scale the rfs according to prf_cv_fold_data
     cov_rfs **= prf_cv_fold_data[:, 3]
     cov_rfs *= prf_cv_fold_data[:, 4]
     cov_rfs += prf_cv_fold_data[:, 5]
+
+    #this step is used in the css model
+    rfs /= ((2 * np.pi * prf_data[rsq_mask_crossv, cv_fold, 2]**2) * 1 /np.diff(css_model.stimulus.deg_x[0, 0:2])**2)
 
     # convert to 1D array and mask with circular mask
     rfs = rfs.reshape((np.prod(mask.shape),-1))[mask.ravel(),:]
