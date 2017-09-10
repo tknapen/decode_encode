@@ -17,14 +17,13 @@ import scipy as sp
 def fit_model_omega(observed_residual_covariance, featurespace_covariance, infile=None, outfile=None, verbose=0):
     initial_guesses=4
 
-    x0=np.zeros((all_residual_covariance_css.shape[0]+2,initial_guesses))+0.5
+    x0=np.zeros((observed_residual_covariance.shape[0]+2,initial_guesses))+0.5
     #none of these work very well
     x0[:,1]=10*np.random.rand(x0.shape[0])
     x0[:,2]=20*np.random.rand(x0.shape[0])
-    x0[2:,3]=np.copy(all_residual_variance_css)    
-    #x0[:,3]=10*np.random.rand(x0.shape[0])
+    x0[2:,3]=np.copy(observed_residual_covariance)    
     
-   #or if possible load the result of the previous minimization
+   # or if possible load the result of the previous minimization
     if infile != None:
         x0[:,0]=np.load(infile)
     
@@ -166,12 +165,17 @@ def calculate_bold_loglikelihood(   linear_predictor,
 
 #simple function using Python built-in minimizer to get a more accurate reconstruction
 #ToDos: deconvolve bold? improve CSS model? different ways of obtaining final reconstruction?    
-def maximize_loglikelihood(starting_value,bold,logdet,omega_inv,rfs,prf_dataa):
+def maximize_loglikelihood( starting_value,
+                            bold,
+                            logdet,
+                            omega_inv,
+                            linear_predictor, 
+                            mask):
     mask2=np.ravel(mask)
 
     bnds=[(0,1) if elem else (0,0) for elem in mask2]
 
-    final_result=sp.optimize.minimize(calculate_bold_loglikelihood, starting_value, args=(bold,logdet,omega_inv,rfs,prf_dataa), method='L-BFGS-B', bounds=bnds,tol=1e-01,options={'disp':True})
+    final_result=sp.optimize.minimize(calculate_bold_loglikelihood, starting_value, args=(linear_predictor, logdet, omega_inv, bold), method='L-BFGS-B', bounds=bnds,tol=1e-01,options={'disp':True})
     decoded_image=final_result.x
     final_image=np.reshape(decoded_image,(rfs.shape[0],rfs.shape[1]))
     logl=-final_result.fun

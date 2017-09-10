@@ -179,7 +179,7 @@ def get_figshare_data(localpath = 'data/V1.h5', remotepath='https://ndownloader.
         urllib.request.urlretrieve(remotepath, localpath)
     return localpath
 
-def createCircularMask(h, w, center=None, radius=None):
+def create_circular_mask(h, w, center=None, radius=None):
 
     if center is None: # use the middle of the image
         center = [int(w/2), int(h/2)]

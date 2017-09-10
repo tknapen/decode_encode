@@ -9,8 +9,8 @@ from scipy.signal import savgol_filter, fftconvolve, deconvolve
 from popeye.spinach import generate_og_receptive_fields
 from popeye.visual_stimulus import VisualStimulus
 
-from utils import roi_data_from_hdf, create_visual_designmatrix_all, get_figshare_data, createCircularMask
-from css import CompressiveSpatialSummationModelFiltered
+from .utils import roi_data_from_hdf, create_visual_designmatrix_all, get_figshare_data, create_circular_mask
+from .css import CompressiveSpatialSummationModelFiltered
 
 
 
@@ -47,7 +47,7 @@ def setup_data_from_h5(data_file,
     rsq_mask_crossv = np.mean(prf_data[:,:,-1], axis=1) > rsq_threshold
 
     # determine amount of trs
-    nr_TRs = timecourse_data_single_run.shape[-1] / n_folds
+    nr_TRs = int(timecourse_data_single_run.shape[-1] / n_folds)
 
     # now, mask the data and select for this fold
     test_data = timecourse_data_single_run[rsq_mask_crossv,nr_TRs*cv_fold:nr_TRs*(cv_fold+1)]
@@ -79,6 +79,17 @@ def setup_data_from_h5(data_file,
     ############################################################################################################################################
     #   setting up prf spatial profiles for subsequent covariances, now some per-run stuff was done
     ############################################################################################################################################
+    
+    # indices into prf output array:
+    #	0:	X
+    #	1:	Y
+    #	2:	s (size, standard deviation of gauss)
+    #	3:	n (nonlinearity power)
+    #	4:	a (amplitude)
+    #	5:	b (baseline, intercept value)
+    #	6:	rsq per-run
+    #	7:	rsq across all
+    #
     deg_x, deg_y = np.meshgrid(np.linspace(extent[0], extent[1], n_pix, endpoint=True), np.linspace(
         extent[0], extent[1], n_pix, endpoint=True))
 
@@ -101,10 +112,10 @@ def setup_data_from_h5(data_file,
     linear_predictor=np.zeros((W.shape[0], W.shape[1]+1))
     linear_predictor[:,1:]=np.copy(W)
     #do some rescalings. This affects decoding quite a lot!
-    linear_predictor **= np.tile(prf_cv_fold_data[rsq_mask_crossv, cv_fold, 3], (linear_predictor.shape[1],1)).T
+    linear_predictor **= np.tile(prf_cv_fold_data[:, 3], (linear_predictor.shape[1],1)).T
     #at this point (after power raising but before multiplication/subtraction) the css model convolves with hrf.
-    linear_predictor *= np.tile(prf_cv_fold_data[rsq_mask_crossv, cv_fold, 4], (linear_predictor.shape[1],1)).T
-    linear_predictor += np.tile(prf_cv_fold_data[rsq_mask_crossv, cv_fold, 5], (linear_predictor.shape[1],1)).T
+    linear_predictor *= np.tile(prf_cv_fold_data[:, 4], (linear_predictor.shape[1],1)).T
+    linear_predictor += np.tile(prf_cv_fold_data[:, 5], (linear_predictor.shape[1],1)).T
 
     ############################################################################################################################################
     #   create covariances and stuff for omega fitting
@@ -122,5 +133,5 @@ def setup_data_from_h5(data_file,
     stimulus_covariance_WW = np.dot(rfs.reshape((-1,rfs.shape[-1])).T,rfs.reshape((-1,rfs.shape[-1])))
     all_residual_covariance_css = np.cov(all_residuals_css) 
 
-    return prf_cv_fold_data, rfs, linear_predictor, all_residuals_css, all_residual_covariance_css, stimulus_covariance_WW
+    return prf_cv_fold_data, rfs, linear_predictor, all_residuals_css, all_residual_covariance_css, stimulus_covariance_WW, test_data
 
