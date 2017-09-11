@@ -6,13 +6,14 @@ import matplotlib.pyplot as pl
 
 from hrf_estimation.hrf import spmt
 from scipy.signal import savgol_filter, fftconvolve, deconvolve
+from scipy.ndimage.interpolation import rotate
 
 from popeye.spinach import generate_og_receptive_fields
 from popeye.visual_stimulus import VisualStimulus
 
 from .utils import roi_data_from_hdf, create_visual_designmatrix_all, get_figshare_data, create_circular_mask
 from .css import CompressiveSpatialSummationModelFiltered
-from ..fit import *
+from .fit import *
 
 from tqdm import tqdm
 
@@ -21,7 +22,6 @@ from tqdm import tqdm
 def setup_data_from_h5(data_file, 
                         n_pix, 
                         extent=[-5,5], 
-                        stim_radius=9.0, 
                         screen_distance=225, 
                         screen_width=69.0, 
                         rsq_threshold=0.5,
@@ -177,11 +177,15 @@ def setup_data_from_h5(data_file,
     return prf_cv_fold_data, rfs, linear_predictor, all_residuals_css, all_residual_covariance_css, stimulus_covariance_WW, test_data, mask
 
 
-def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, **kwargs):
+def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, extent, screen_distance, screen_width, TR, **kwargs):
     
+    # for key, value in kwargs.iteritems():
+    #         key = value
+
+
     # set up results variables
     cv_decoded_image, cv_reshrot_recon, cv_reshrot_recon_m, \
-    cv_omegas, cv_estimated_tau_matrix, \
+    cv_omega, cv_estimated_tau_matrix, \
     cv_estimated_rho, cv_estimated_sigma = [], [], [], [], [], [], []
 
     for i in tqdm(range(n_folds)):
@@ -192,7 +196,6 @@ def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, **kwarg
                                 data_file = data_file, 
                                 n_pix=n_pix, 
                                 extent=extent, 
-                                stim_radius=stim_radius, 
                                 screen_distance=screen_distance, 
                                 screen_width=screen_width, 
                                 rsq_threshold=rsq_threshold,
@@ -222,7 +225,8 @@ def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, **kwarg
                                                 linear_predictor=linear_predictor)
 
         decoded_image = np.zeros((mask.sum(),test_data.shape[1]))  
-        for t, bold in enumerate(tqdm(test_data.T)):
+        for t, bold in enumerate(test_data.T):
+        # for t, bold in enumerate(tqdm(test_data.T)):
             
             starting_value=dm_pixel_logl_ratio[:,t]
             prf_data=prf_cv_fold_data
@@ -284,11 +288,12 @@ def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, **kwarg
         cv_estimated_sigma.append(estimated_sigma)
 
 
-    cv_decoded_image = np.array(decoded_image)
-    cv_reshrot_recon = np.array(reshrot_recon)
-    cv_reshrot_recon_m = np.array(reshrot_recon_m)
-    cv_omega = np.array(omega)
-    cv_estimated_tau_matrix = np.array(estimated_tau_matrix)
-    cv_estimated_rho = np.array(estimated_rho)
-    cv_estimated_sigma = np.array(estimated_sigma)
+    cv_decoded_image = np.array(cv_decoded_image)
+    cv_reshrot_recon = np.array(cv_reshrot_recon)
+    cv_reshrot_recon_m = np.array(cv_reshrot_recon_m)
+    cv_omega = np.array(cv_omega)
+    cv_estimated_tau_matrix = np.array(cv_estimated_tau_matrix)
+    cv_estimated_rho = np.array(cv_estimated_rho)
+    cv_estimated_sigma = np.array(cv_estimated_sigma)
 
+    return cv_decoded_image, cv_reshrot_recon, cv_reshrot_recon_m, cv_omega, cv_estimated_tau_matrix, cv_estimated_rho, cv_estimated_sigma
