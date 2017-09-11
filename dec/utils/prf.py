@@ -12,6 +12,9 @@ from popeye.visual_stimulus import VisualStimulus
 
 from .utils import roi_data_from_hdf, create_visual_designmatrix_all, get_figshare_data, create_circular_mask
 from .css import CompressiveSpatialSummationModelFiltered
+from ..fit import *
+
+from tqdm import tqdm
 
 
 
@@ -52,9 +55,10 @@ def setup_data_from_h5(data_file,
     dm = dm[mask,:]
     
     # voxel mask for crossvalidation
-    rsq_crossv = np.mean(prf_data[:,:,-1], axis=1)
+    # only count those voxels here that have positive rsq
+    rsq_crossv = np.mean(prf_data[:,:,-1], axis=1) * np.sign(np.mean(prf_data[:,:,4], axis=1))
     rsq_mask_crossv = rsq_crossv > rsq_threshold
-
+    
     # determine amount of trs
     nr_TRs = int(timecourse_data_single_run.shape[-1] / n_folds)
 
@@ -159,14 +163,132 @@ def setup_data_from_h5(data_file,
     pl.plot(train_data[np.argmax(rsq_crossv[rsq_mask_crossv])], label='data')
     pl.plot(all_residuals_css[np.argmax(rsq_crossv[rsq_mask_crossv])], label='resid')
     pl.legend()
+    s.set_title('best voxel')
     s = f.add_subplot(212)
     pl.plot(css_prediction[np.argmin(rsq_crossv[rsq_mask_crossv])], label='prediction')
     pl.plot(train_data[np.argmin(rsq_crossv[rsq_mask_crossv])], label='data')
     pl.plot(all_residuals_css[np.argmin(rsq_crossv[rsq_mask_crossv])], label='resid')
     pl.legend()
+    s.set_title('worst voxel given this threshold')
     
     stimulus_covariance_WW = np.dot(rfs.T,rfs)
     all_residual_covariance_css = np.cov(all_residuals_css) 
 
     return prf_cv_fold_data, rfs, linear_predictor, all_residuals_css, all_residual_covariance_css, stimulus_covariance_WW, test_data, mask
+
+
+def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, **kwargs):
+    
+    # set up results variables
+    cv_decoded_image, cv_reshrot_recon, cv_reshrot_recon_m, \
+    cv_omegas, cv_estimated_tau_matrix, \
+    cv_estimated_rho, cv_estimated_sigma = [], [], [], [], [], [], []
+
+    for i in tqdm(range(n_folds)):
+        # get the data
+        (prf_cv_fold_data, rfs, linear_predictor, 
+         all_residuals_css, all_residual_covariance_css, 
+         stimulus_covariance_WW, test_data, mask) = setup_data_from_h5(
+                                data_file = data_file, 
+                                n_pix=n_pix, 
+                                extent=extent, 
+                                stim_radius=stim_radius, 
+                                screen_distance=screen_distance, 
+                                screen_width=screen_width, 
+                                rsq_threshold=rsq_threshold,
+                                TR=TR,
+                                cv_fold=i,
+                                n_folds=n_folds,
+                                use_median=False)
+
+        # estimate the covariance structure, which outputs all parameters
+        (estimated_tau_matrix, estimated_rho, 
+         estimated_sigma, omega, 
+         omega_inv, logdet) = fit_model_omega(
+                                        observed_residual_covariance=all_residual_covariance_css, 
+                                        featurespace_covariance=stimulus_covariance_WW,
+                                        verbose=1
+                                        )
+
+         # set up result array:
+        dm_pixel_logl_ratio = np.zeros((mask.sum(),test_data.shape[1]))
+
+        # and loop across timepoints
+        for t, bold in enumerate(test_data.T):
+            dm_pixel_logl_ratio[:,t] = firstpass_decoder_independent_Ws(
+                                                bold=bold, 
+                                                logdet=logdet,
+                                                omega_inv=omega_inv,
+                                                linear_predictor=linear_predictor)
+
+        decoded_image = np.zeros((mask.sum(),test_data.shape[1]))  
+        for t, bold in enumerate(tqdm(test_data.T)):
+            
+            starting_value=dm_pixel_logl_ratio[:,t]
+            prf_data=prf_cv_fold_data
+            bnds=[(-100,100) for elem in rfs]
+
+
+            final_result=sp.optimize.minimize(
+                                            calculate_bold_loglikelihood, 
+                                            starting_value, 
+                                            args=(  rfs,
+                                                    prf_data, 
+                                                    logdet, 
+                                                    omega_inv, 
+                                                    bold), 
+                                            method='L-BFGS-B', 
+                                            bounds=bnds,
+                                            tol=1e-04,
+                                            options={'disp':False})
+            decoded_image[:,t] = final_result.x
+            logl = -final_result.fun
+
+        # fill in the mask
+        recon = np.zeros([decoded_image.shape[1]]+list(mask.shape) )
+        for t in range(decoded_image.shape[1]):
+            recon[t,mask] = decoded_image[:,t]
+
+        # rotate reconstructions to bar orientation
+        thetas = [-1, 0, -1, 45, 270, -1,  315,  180, -1,  135,   90, -1,  225, -1]
+        rotated_recon = np.copy(recon).T
+
+        hrf_delay = 0
+        block_delimiters = np.r_[np.arange(2, 462, 34) + hrf_delay, 462]
+        reshrot_recon = np.zeros((8, rotated_recon.shape[0], rotated_recon.shape[1], 38))
+        bar_counter = 0
+        for i in range(len(block_delimiters) - 1):
+            if thetas[i] != -1:
+                rotated_recon[:, :, block_delimiters[i]:block_delimiters[i + 1] + 4] = rotate(rotated_recon[:, :, block_delimiters[i]:block_delimiters[i + 1] + 4],
+                                                                                              axes=(
+                    0, 1),
+                    angle=thetas[i],
+                    reshape=False,
+                    mode='nearest')
+                reshrot_recon[bar_counter] = rotated_recon[:, :,
+                                                           block_delimiters[i]:block_delimiters[i + 1] + 4]
+                bar_counter += 1
+
+        reshrot_recon_m = np.median(reshrot_recon, axis=0)
+
+        ##############################
+        #   Save out results
+        ##############################
+
+        cv_decoded_image.append(decoded_image)
+        cv_reshrot_recon.append(reshrot_recon)
+        cv_reshrot_recon_m.append(reshrot_recon_m)
+        cv_omega.append(omega)
+        cv_estimated_tau_matrix.append(estimated_tau_matrix)
+        cv_estimated_rho.append(estimated_rho)
+        cv_estimated_sigma.append(estimated_sigma)
+
+
+    cv_decoded_image = np.array(decoded_image)
+    cv_reshrot_recon = np.array(reshrot_recon)
+    cv_reshrot_recon_m = np.array(reshrot_recon_m)
+    cv_omega = np.array(omega)
+    cv_estimated_tau_matrix = np.array(estimated_tau_matrix)
+    cv_estimated_rho = np.array(estimated_rho)
+    cv_estimated_sigma = np.array(estimated_sigma)
 
