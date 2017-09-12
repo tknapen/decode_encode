@@ -297,3 +297,36 @@ def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, extent,
     cv_estimated_sigma = np.array(cv_estimated_sigma)
 
     return cv_decoded_image, cv_reshrot_recon, cv_reshrot_recon_m, cv_omega, cv_estimated_tau_matrix, cv_estimated_rho, cv_estimated_sigma
+
+
+#   0%|          | 0/6 [00:00<?, ?it/s]
+# data file found, returning local file ../data/V1.h5
+# max tau: 140.139935703 min tau: 2.24584848951
+# sigma: 5.75604779908 rho: 0.0140699975513
+# summed squared distance: 444618382.496
+#  17%|█▋        | 1/6 [02:01<10:05, 121.07s/it]
+# data file found, returning local file ../data/V1.h5
+# max tau: 43.8768334409 min tau: 0.830690536232
+# sigma: 8.72147338743 rho: 0.111600068051
+# summed squared distance: 3433452.07076
+#  33%|███▎      | 2/6 [04:01<08:04, 121.02s/it]
+# data file found, returning local file ../data/V1.h5
+# max tau: 72.5664452049 min tau: 1.14343146174
+# sigma: 5.92838085616 rho: 0.0351495921648
+# summed squared distance: 35334222.2567
+#  50%|█████     | 3/6 [05:55<05:56, 118.72s/it]
+# data file found, returning local file ../data/V1.h5
+# max tau: 41.4005198983 min tau: 0.790744766647
+# sigma: -5.14436990217 rho: 0.125429150112
+# summed squared distance: 2501341.73854
+#  67%|██████▋   | 4/6 [07:47<03:53, 116.83s/it]
+# data file found, returning local file ../data/V1.h5
+# max tau: 39.3126611088 min tau: 2.16457366969
+# sigma: 10.4218693161 rho: 0.0367255035114
+# summed squared distance: 7811951.39835
+#  83%|████████▎ | 5/6 [09:46<01:57, 117.32s/it]
+# data file found, returning local file ../data/V1.h5
+# max tau: 18.611556683 min tau: -0.360151297827
+# sigma: 13.6759073136 rho: 0.232756200748
+# summed squared distance: 209931.292302
+# 100%|██████████| 6/6 [11:47<00:00, 118.61s/it]
