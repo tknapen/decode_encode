@@ -2,6 +2,9 @@
 
 This repo contains code to optimally decode stimulus features from a previously fit encoding model. 
 
+This method was published by:
+van Bergen, R. S., Ma, W. J., Pratte, M. S., & Jehee, J. F. M. (2015). Sensory uncertainty decoded from visual cortex predicts behavior. Nature Neuroscience, 18(12), 1728–1730. http://doi.org/10.1038/nn.4150
+
 The first use-case is for the reconstruction of visual images from brain activations after population receptive field mapping of these voxels. 
 
 
