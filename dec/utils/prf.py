@@ -28,7 +28,8 @@ def setup_data_from_h5(data_file,
                         TR=0.945,
                         cv_fold=1,
                         n_folds=6,
-                        use_median=True):
+                        use_median=True,
+                        mask_name = 'V1'):
         
     hdf5_file = get_figshare_data(data_file)
 
@@ -37,12 +38,12 @@ def setup_data_from_h5(data_file,
     ############################################################################################################################################
 
     # timecourses are single-run psc data, either original or leave-one-out. 
-    timecourse_data_single_run = roi_data_from_hdf(['*psc'],'V1', hdf5_file,'psc').astype(np.float64)
-    timecourse_data_loo = roi_data_from_hdf(['*loo'],'V1', hdf5_file,'loo').astype(np.float64)
-    timecourse_data_all_psc = roi_data_from_hdf(['*av'],'V1', hdf5_file,'all_psc').astype(np.float64)
+    timecourse_data_single_run = roi_data_from_hdf(['*psc'],mask_name, hdf5_file,'psc').astype(np.float64)
+    timecourse_data_loo = roi_data_from_hdf(['*loo'],mask_name, hdf5_file,'loo').astype(np.float64)
+    timecourse_data_all_psc = roi_data_from_hdf(['*av'],mask_name, hdf5_file,'all_psc').astype(np.float64)
     # prfs are per-run, as fit using the loo data
-    all_prf_data = roi_data_from_hdf(['*all'],'V1', hdf5_file,'all_prf').astype(np.float64)
-    prf_data = roi_data_from_hdf(['*all'],'V1', hdf5_file,'prf').astype(np.float64).reshape((all_prf_data.shape[0], -1, all_prf_data.shape[-1]))
+    all_prf_data = roi_data_from_hdf(['*all'],mask_name, hdf5_file,'all_prf').astype(np.float64)
+    prf_data = roi_data_from_hdf(['*all'],mask_name, hdf5_file,'prf').astype(np.float64).reshape((all_prf_data.shape[0], -1, all_prf_data.shape[-1]))
 
     dm=create_visual_designmatrix_all(n_pixels=n_pix)
     if use_median:
@@ -71,6 +72,13 @@ def setup_data_from_h5(data_file,
 
     # set up the prf_data variable needed for decoding
     prf_cv_fold_data = prf_data[rsq_mask_crossv,cv_fold]
+
+    # rescale the data
+    test_data -= prf_cv_fold_data[:, 5, np.newaxis]
+    test_data /= prf_cv_fold_data[:, 4, np.newaxis]
+
+    train_data -= prf_cv_fold_data[:, 5, np.newaxis]
+    train_data /= prf_cv_fold_data[:, 4, np.newaxis]
 
     ############################################################################################################################################
     #   setting up prf timecourses - NOTE, this is for the 'all' situation, so should be really done on a run-by-run basis using a run's 
@@ -116,32 +124,31 @@ def setup_data_from_h5(data_file,
                                         deg_x, 
                                         deg_y)
     
-    cov_rfs = np.copy(rfs)
-    # scale the rfs according to prf_cv_fold_data
-    cov_rfs **= prf_cv_fold_data[:, 3]
-    cov_rfs *= prf_cv_fold_data[:, 4]
-    cov_rfs += prf_cv_fold_data[:, 5]
-
     #this step is used in the css model
     rfs /= ((2 * np.pi * prf_data[rsq_mask_crossv, cv_fold, 2]**2) * 1 /np.diff(css_model.stimulus.deg_x[0, 0:2])**2)
+    rfs **= prf_cv_fold_data[:, 3]
 
     # convert to 1D array and mask with circular mask
     rfs = rfs.reshape((np.prod(mask.shape),-1))[mask.ravel(),:]
-    cov_rfs = cov_rfs.reshape((np.prod(mask.shape),-1))[mask.ravel(),:]
 
     ############################################################################################################################################
-    #   setting up prf spatial profiles for the decoding step, creating linear_predictor
+    #   setting up prf spatial profiles for the decoding step, creating linear_predictor_ip
     ############################################################################################################################################
 
     # and then we try to use this:
     W=rfs.T
-    linear_predictor=np.zeros((W.shape[0], W.shape[1]+1))
-    linear_predictor[:,1:]=np.copy(W)
+    linear_predictor_ip=np.zeros((W.shape[0], W.shape[1]+1))
+    linear_predictor_ip[:,1:]=np.copy(W)
     #do some rescalings. This affects decoding quite a lot!
-    linear_predictor **= np.tile(prf_cv_fold_data[:, 3], (linear_predictor.shape[1],1)).T
-    #at this point (after power raising but before multiplication/subtraction) the css model convolves with hrf.
-    linear_predictor *= np.tile(prf_cv_fold_data[:, 4], (linear_predictor.shape[1],1)).T
-    linear_predictor += np.tile(prf_cv_fold_data[:, 5], (linear_predictor.shape[1],1)).T
+    # linear_predictor_ip **= np.tile(prf_cv_fold_data[:, 3], (linear_predictor_ip.shape[1],1)).T
+    # #at this point (after power raising but before multiplication/subtraction) the css model convolves with hrf.
+    # linear_predictor_ip *= np.tile(prf_cv_fold_data[:, 4], (linear_predictor_ip.shape[1],1)).T
+    # linear_predictor_ip += np.tile(prf_cv_fold_data[:, 5], (linear_predictor_ip.shape[1],1)).T
+
+
+
+
+
 
     ############################################################################################################################################
     #   create covariances and stuff for omega fitting
@@ -152,7 +159,7 @@ def setup_data_from_h5(data_file,
     css_prediction=np.zeros((rsq_mask_crossv.sum(),train_data.shape[1]))
     for g, vox_prf_pars in enumerate(prf_cv_fold_data):
         css_prediction[g] = css_model.generate_prediction(
-            x=vox_prf_pars[0], y=vox_prf_pars[1], sigma=vox_prf_pars[2], n=vox_prf_pars[3], beta=vox_prf_pars[4], baseline=vox_prf_pars[5])
+            x=vox_prf_pars[0], y=vox_prf_pars[1], sigma=vox_prf_pars[2], n=vox_prf_pars[3], beta=1, baseline=0)
 
     all_residuals_css = train_data - css_prediction
     
@@ -174,10 +181,10 @@ def setup_data_from_h5(data_file,
     stimulus_covariance_WW = np.dot(rfs.T,rfs)
     all_residual_covariance_css = np.cov(all_residuals_css) 
 
-    return prf_cv_fold_data, rfs, linear_predictor, all_residuals_css, all_residual_covariance_css, stimulus_covariance_WW, test_data, mask
+    return prf_cv_fold_data, rfs, linear_predictor_ip, all_residuals_css, all_residual_covariance_css, stimulus_covariance_WW, test_data, mask
 
 
-def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, extent, screen_distance, screen_width, TR, **kwargs):
+def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, extent, screen_distance, screen_width, TR, mask_name, **kwargs):
     
     # for key, value in kwargs.iteritems():
     #         key = value
@@ -190,7 +197,7 @@ def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, extent,
 
     for i in tqdm(range(n_folds)):
         # get the data
-        (prf_cv_fold_data, rfs, linear_predictor, 
+        (prf_cv_fold_data, rfs, linear_predictor_ip, 
          all_residuals_css, all_residual_covariance_css, 
          stimulus_covariance_WW, test_data, mask) = setup_data_from_h5(
                                 data_file = data_file, 
@@ -202,7 +209,8 @@ def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, extent,
                                 TR=TR,
                                 cv_fold=i,
                                 n_folds=n_folds,
-                                use_median=False)
+                                use_median=False,
+                                mask_name=mask_name)
 
         # estimate the covariance structure, which outputs all parameters
         (estimated_tau_matrix, estimated_rho, 
@@ -222,7 +230,7 @@ def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, extent,
                                                 bold=bold, 
                                                 logdet=logdet,
                                                 omega_inv=omega_inv,
-                                                linear_predictor=linear_predictor)
+                                                linear_predictor_ip=linear_predictor_ip)
 
         decoded_image = np.zeros((mask.sum(),test_data.shape[1]))  
         for t, bold in enumerate(test_data.T):

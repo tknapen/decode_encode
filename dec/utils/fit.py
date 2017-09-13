@@ -133,14 +133,14 @@ def fit_model_omega(observed_residual_covariance, featurespace_covariance, infil
 def firstpass_decoder_independent_Ws(   bold, 
                                             logdet,
                                             omega_inv,
-                                            linear_predictor):
+                                            linear_predictor_ip):
     if logdet[0]!=1.0:
         print('Error: model covariance has negative or zero determinant')
         return
     const=-0.5*(logdet[1]+omega_inv.shape[0]*np.log(2*np.pi))
 
     # difference between bold response and linear predictor is residuals
-    resid=np.tile(bold,(linear_predictor.shape[1],1)).T-linear_predictor
+    resid=np.tile(bold,(linear_predictor_ip.shape[1],1)).T-linear_predictor_ip
 
     # actual calculation here
     log_likelihood_indep_Ws=const - 0.5 * (resid * omega_inv.dot(resid)).sum(0)
@@ -176,10 +176,10 @@ def calculate_bold_loglikelihood(   stimulus,
 
     linear_predictor = np.dot(rfs.T,stimulus)
     #do some rescalings. This affects decoding quite a lot!
-    linear_predictor **= prf_data[:, 3]
-    #at this point (after power raising but before multiplication/subtraction) the css model convolves with hrf.
-    linear_predictor *= prf_data[:, 4]
-    linear_predictor += prf_data[:, 5]
+    # linear_predictor **= prf_data[:, 3]
+    # #at this point (after power raising but before multiplication/subtraction) the css model convolves with hrf.
+    # linear_predictor *= prf_data[:, 4]
+    # linear_predictor += prf_data[:, 5]
     
     resid=bold-linear_predictor
 

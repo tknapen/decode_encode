@@ -167,6 +167,8 @@ def roi_data_from_hdf(data_types_wildcards, roi_name_wildcard, hdf5_file, folder
 
 
 def get_figshare_data(localpath = 'data/V1.h5', remotepath='https://ndownloader.figshare.com/files/9183091'):
+    '''New location of the data is https://ndownloader.figshare.com/articles/5400205/versions/1
+    '''
     if os.path.isfile(localpath):
         print('data file found, returning local file %s'%localpath)
         pass 
