@@ -42,10 +42,10 @@ def fit_model_omega(observed_residual_covariance, featurespace_covariance, infil
         #tried to use stimulus_covariance as W_matrix: search was interrupted as it becomes several order of magnitudes slower.
         tau_matrix = np.outer(x[2:],x[2:])
         
-        unique_variance = np.eye(tau_matrix.shape[0]) * (1-rho)
+        unique_variance = np.eye(tau_matrix.shape[0]) * (1-rho) * tau_matrix
         shared_variance = tau_matrix * rho
         
-        omega = shared_variance + unique_variance + sigma**2 * W_matrix
+        omega = shared_variance + unique_variance + (sigma**2) * W_matrix
         
         return np.sum(np.square(residual_covariance - omega))
     
@@ -81,7 +81,7 @@ def fit_model_omega(observed_residual_covariance, featurespace_covariance, infil
     estimated_rho=x[0]
     estimated_sigma=x[1]
         
-    model_omega=estimated_rho*estimated_tau_matrix+(1-estimated_rho)*np.multiply(np.identity(estimated_tau_matrix.shape[0]),estimated_tau_matrix)+estimated_sigma**2*featurespace_covariance
+    model_omega=estimated_rho*estimated_tau_matrix+(1-estimated_rho)*np.multiply(np.identity(estimated_tau_matrix.shape[0]),estimated_tau_matrix)+(estimated_sigma**2)*featurespace_covariance
     model_omega_inv = np.linalg.inv(model_omega)
     logdet = np.linalg.slogdet(model_omega)
 
@@ -176,10 +176,10 @@ def calculate_bold_loglikelihood(   stimulus,
 
     linear_predictor = np.dot(rfs.T,stimulus)
     #do some rescalings. This affects decoding quite a lot!
-    # linear_predictor **= prf_data[:, 3]
+    #linear_predictor **= prf_data[:, 3]
     # #at this point (after power raising but before multiplication/subtraction) the css model convolves with hrf.
-    # linear_predictor *= prf_data[:, 4]
-    # linear_predictor += prf_data[:, 5]
+    #linear_predictor *= prf_data[:, 4]
+    #linear_predictor += prf_data[:, 5]
     
     resid=bold-linear_predictor
 
