@@ -9,13 +9,15 @@ import scipy as sp
 #   Takes as argument
 #   observed_residual_covariance: (n_voxels,n_voxels) matrix. the observed covariance of residuals, to be calculated
 #   in advance, depending on the model used
-#   featurespace_covariance: that is W.dot(W.T) where W is a n_voxel * n_features matrix
+#   WWT: that is W.dot(W.T) where W is a n_voxel * n_features matrix
 #   in our case is the receptive fields covariance
 ############################################################################################################################################
 
 
-def fit_model_omega(observed_residual_covariance, featurespace_covariance, infile=None, outfile=None, verbose=0):
-
+def fit_model_omega(observed_residual_covariance, WWT, infile=None, outfile=None, verbose=0):
+    """
+    
+    """
    # or if possible load the result of the previous minimization
     if infile != None:
         x0=np.load(infile)
@@ -35,17 +37,17 @@ def fit_model_omega(observed_residual_covariance, featurespace_covariance, infil
     bnds[0]=(0,1)
     # bnds[1]=(0,1)
     
-    def f(x, residual_covariance, W_matrix):
+    def f(x, residual_covariance, WWT):
         rho=x[0]
         sigma=x[1]
         #tried to use the all_residual_covariance as tau_matrix: optimization fails (maybe use it as initial values for search. tried & failed)
-        #tried to use stimulus_covariance as W_matrix: search was interrupted as it becomes several order of magnitudes slower.
+        #tried to use stimulus_covariance as WWT: search was interrupted as it becomes several order of magnitudes slower.
         tau_matrix = np.outer(x[2:],x[2:])
         
         unique_variance = np.eye(tau_matrix.shape[0]) * (1-rho) * tau_matrix
         shared_variance = tau_matrix * rho
         
-        omega = shared_variance + unique_variance + (sigma**2) * W_matrix
+        omega = shared_variance + unique_variance + (sigma**2) * WWT
         
         return np.sum(np.square(residual_covariance - omega))
     
@@ -55,7 +57,7 @@ def fit_model_omega(observed_residual_covariance, featurespace_covariance, infil
     for k in range(x0.shape[1]):
         result=sp.optimize.minimize(f, 
                                     x0[:,k], 
-                                    args=(observed_residual_covariance, featurespace_covariance), 
+                                    args=(observed_residual_covariance, WWT), 
                                     method='L-BFGS-B', 
                                     bounds=bnds,
                                     tol=1e-02,
@@ -69,7 +71,7 @@ def fit_model_omega(observed_residual_covariance, featurespace_covariance, infil
             
     better_result=sp.optimize.minimize(f, 
                                        best_result['x'], 
-                                       args=(observed_residual_covariance, featurespace_covariance), 
+                                       args=(observed_residual_covariance, WWT), 
                                        method='L-BFGS-B', 
                                        bounds=bnds, 
                                        tol=1e-06, 
@@ -81,7 +83,7 @@ def fit_model_omega(observed_residual_covariance, featurespace_covariance, infil
     estimated_rho=x[0]
     estimated_sigma=x[1]
         
-    model_omega=estimated_rho*estimated_tau_matrix+(1-estimated_rho)*np.multiply(np.identity(estimated_tau_matrix.shape[0]),estimated_tau_matrix)+(estimated_sigma**2)*featurespace_covariance
+    model_omega=estimated_rho*estimated_tau_matrix+(1-estimated_rho)*np.multiply(np.identity(estimated_tau_matrix.shape[0]),estimated_tau_matrix)+(estimated_sigma**2)*WWT
     model_omega_inv = np.linalg.inv(model_omega)
     logdet = np.linalg.slogdet(model_omega)
 
@@ -130,17 +132,30 @@ def fit_model_omega(observed_residual_covariance, featurespace_covariance, infil
 #by quite a lot. lets do without for now. use this simple linear algebra trick to calculate only the needed
 #elements.
 #trial=(RESID * model_omega_inv.dot(RESID)).sum(0)
-def firstpass_decoder_independent_Ws(   bold, 
+def firstpass_decoder_independent_channels( bold, 
                                             logdet,
                                             omega_inv,
-                                            linear_predictor_ip):
+                                            linear_predictor_independent_channels,
+                                            mapping_relation=None,
+                                            mapping_parameters=[]):
     if logdet[0]!=1.0:
         print('Error: model covariance has negative or zero determinant')
         return
     const=-0.5*(logdet[1]+omega_inv.shape[0]*np.log(2*np.pi))
 
+    # possible mappings to implement nonlinear transformation
+    if mapping_relation != None:
+        if type(mapping_relation) == list:
+            non_linear_predictor_independent_channels = linear_predictor_independent_channels
+            for i, mr in enumerate(mapping_relation):
+                non_linear_predictor_independent_channels = mapping(non_linear_predictor_independent_channels, mapping_relation=mr, parameters=mapping_parameters[i])
+        else:
+            non_linear_predictor_independent_channels = mapping(linear_predictor_independent_channels, mapping_relation=mapping_relation, parameters=mapping_parameters)
+    else:
+        non_linear_predictor_independent_channels = linear_predictor_independent_channels
+
     # difference between bold response and linear predictor is residuals
-    resid=np.tile(bold,(linear_predictor_ip.shape[1],1)).T-linear_predictor_ip
+    resid=np.tile(bold,(non_linear_predictor_independent_channels.shape[1],1)).T-non_linear_predictor_independent_channels
 
     # actual calculation here
     log_likelihood_indep_Ws=const - 0.5 * (resid * omega_inv.dot(resid)).sum(0)
@@ -156,6 +171,26 @@ def firstpass_decoder_independent_Ws(   bold,
     return firstpass_image_normalized
 
 
+
+def mapping(data, mapping_relation='linear', parameters=[]):
+    """ mapping converts the input data through a given mapping.
+    mapping_relation indicates which type of transformation, 
+    parameters describe the parameters to be used for each voxel, or W element.
+    """
+
+    if mapping_relation == 'linear':
+        if parameters == []:
+            parameters = np.r_[np.zeros(data.shape), np.ones(data.shape)].T
+        return data * parameters[:,0] + parameters[:,1]
+    elif mapping_relation == 'power_law':
+        if parameters == []:
+            parameters = np.ones(data.shape)
+        return data ** parameters
+    elif mapping_relation == 'cosine':
+        return np.cos(data + parameters)
+
+
+
 ############################################################################################################################################
 #   This function calculates the probability of a hypothetical bold pattern, given some stimulus expressed pixel by pixel.
 #   The entire model is captured by the receptive fields and the model covariance matrix (omega) which depends on rho,sigma,taus)
@@ -166,44 +201,52 @@ def firstpass_decoder_independent_Ws(   bold,
 ############################################################################################################################################
 
 def calculate_bold_loglikelihood(   stimulus,
-                                    rfs,
-                                    prf_data,
-                                    logdet,
+                                    W,
+                                    bold,
                                     omega_inv,
-                                    bold):
+                                    logdet,
+                                    mapping_relation=None,
+                                    mapping_parameters=[]):
 
     const=-0.5*(logdet[1]+omega_inv.shape[0]*np.log(2*np.pi))
 
-    linear_predictor = np.dot(rfs.T,stimulus)
-    #do some rescalings. This affects decoding quite a lot!
-    #linear_predictor **= prf_data[:, 3]
-    # #at this point (after power raising but before multiplication/subtraction) the css model convolves with hrf.
-    #linear_predictor *= prf_data[:, 4]
-    #linear_predictor += prf_data[:, 5]
-    
-    resid=bold-linear_predictor
+    linear_predictor = np.dot(W.T,stimulus)
 
-    log_likelihood=const-0.5*np.dot(resid,np.dot(omega_inv,resid))
+    # possible mappings to implement nonlinear transformation
+    if mapping_relation != None:
+        if type(mapping_relation) == list:
+            non_linear_predictor = linear_predictor
+            for i, mr in enumerate(mapping_relation):
+                non_linear_predictor = mapping(non_linear_predictor, mapping_relation=mr, parameters=mapping_parameters[i])
+        else:
+            non_linear_predictor = mapping(linear_predictor, mapping_relation=mapping_relation, parameters=mapping_parameters)
+    else:
+        non_linear_predictor = linear_predictor
+    
+    resid = bold - non_linear_predictor
+
+    log_likelihood = const - 0.5 * np.dot(resid, np.dot(omega_inv, resid))
 
     return -log_likelihood
 
 #simple function using Python built-in minimizer to get a more accurate reconstruction
 def maximize_loglikelihood( starting_value,
                             bold,
-                            logdet,
                             omega_inv,
-                            rfs,
-                            prf_data):
-    bnds=[(0,1) for elem in rfs]
+                            logdet,
+                            mapping_relation=None,
+                            mapping_parameters=[]):
+    bnds=[(0,1) for elem in W]
 
     final_result=sp.optimize.minimize(
                                     calculate_bold_loglikelihood, 
                                     starting_value, 
-                                    args=(  rfs,
-                                            prf_data, 
-                                            logdet, 
+                                    args=(  W,
+                                            bold,
                                             omega_inv, 
-                                            bold), 
+                                            logdet, 
+                                            mapping_relation=mapping_relation
+                                            mapping_parameters=mapping_parameters), 
                                     method='L-BFGS-B', 
                                     bounds=bnds,
                                     tol=1e-01,
