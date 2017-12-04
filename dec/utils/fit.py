@@ -34,11 +34,11 @@ import scipy as sp
 #   bold: the observed bold signal that is to be decoded.
 #   logdet: log of the determinant of model omega, one of the outputs of the fit_omega function
 #   omega_inv: inverse of the model omega, one of the outputs of the fit_omega function
-#   W: this is simply the W (features) matrix itself derived in the model fitting procedure. Size must be (n_voxels,n_pixels)
+#   W: this is simply the W (features) matrix itself derived in the model fitting procedure. Size must be (n_voxels,n_features)
 #   W can be interpreted as a simple linear prediction assuming all channels are independent of each other
 #   mapping_relation: 'None', 'linear', 'power_law', 'cosine'. Or a list of these to be applied in sequence to the linear model,
 #   in the same fashion as was done in the model fitting procedure. Parameters must be provided for all these transformation.
-#   'linear' and 'cosine' require two parameters for each voxel. (intercept and slope for linear), (phase and amplitude for cosine)
+#   'linear' and 'cosine' require two parameters for each voxel. (slope and intercept for linear), (amplitude and phase for cosine)
 #   returns
 #   firstpass_image_normalized: firstpass decoded result
 ############################################################################################################################################
@@ -54,17 +54,18 @@ def firstpass_decoder_independent_channels( W,
         print('Error: model covariance has negative or zero determinant')
         return
     const=-0.5*(logdet[1]+omega_inv.shape[0]*np.log(2*np.pi))
-
+    
+    #1 extra column for empty screen baseline
+    non_linear_predictor_independent_channels =  np.zeros((W.shape[0], W.shape[1]+1))
+    non_linear_predictor_independent_channels[:,1:]=np.copy(W)
     # possible mappings to implement nonlinear transformation
     if mapping_relation != None:
-        if type(mapping_relation) == list:
-            non_linear_predictor_independent_channels = W
+        if type(mapping_relation) == list:         
             for i, mr in enumerate(mapping_relation):
                 non_linear_predictor_independent_channels = mapping(non_linear_predictor_independent_channels, mapping_relation=mr, parameters=mapping_parameters[i])
         else:
-            non_linear_predictor_independent_channels = mapping(W, mapping_relation=mapping_relation, parameters=mapping_parameters)
-    else:
-        non_linear_predictor_independent_channels = W
+            non_linear_predictor_independent_channels = mapping(non_linear_predictor_independent_channels, mapping_relation=mapping_relation, parameters=mapping_parameters)
+            
 
     # difference between bold response and linear predictor is residuals
     resid=np.tile(bold,(non_linear_predictor_independent_channels.shape[1],1)).T-non_linear_predictor_independent_channels
@@ -88,20 +89,42 @@ def mapping(data, mapping_relation='linear', parameters=[]):
     """ mapping converts the linear model W* through a given mapping.
     mapping_relation indicates which type of transformation, 
     parameters describe the parameters to be used for each voxel, or W element.
+    The parameters must be specified as a matrix of size (nr_voxels, nr_parameters)
+    Where nr_parameters is 1 for the power_law mapping and 2 for linear and cosine transformation
+    slightly counterintuitive notation thing: parameters0 defaults to 1 and parameters1 defaults to 0.
+    This ensures that if parameters are not specified, the transformation is just an identity. (And a warning is printed)
     """
-
+   
+    if parameters == []:
+        print("Warning: the mapping parameters were not specified. Using default values.")
+        parameters = np.r_['1,2,0', np.ones(data.shape[0]), np.zeros(data.shape[0])]
+        
+    parameters0=np.ones(data.shape)
+    parameters1=np.zeros(data.shape)
+              
+    if len(data.shape)!=1:
+        if len(parameters.shape)!=1:
+            parameters0 = np.tile(parameters[:,0],(data.shape[1],1)).T
+            parameters1 = np.tile(parameters[:,1],(data.shape[1],1)).T
+        else:
+            parameters0=np.tile(parameters,(data.shape[1],1)).T
+    else:
+        if len(parameters.shape)!=1:
+            parameters0=parameters[:,0]
+            parameters1 = parameters[:,1]
+        else:
+            parameters0=parameters
+        
     if mapping_relation == 'linear':
-        if parameters == []:
-            parameters = np.r_['1,2,0', np.zeros(data.shape), np.ones(data.shape)]
-        return data * parameters[:,1] + parameters[:,0]
+        return data * parameters0 + parameters1
     elif mapping_relation == 'power_law':
-        if parameters == []:
-            parameters = np.ones(data.shape)
-        return data ** parameters
+        return data ** parameters0
     elif mapping_relation == 'cosine':
-        if parameters == []:
-            parameters = np.r_['1,2,0', np.zeros(data.shape), np.ones(data.shape)]
-            return parameters[:,1]*np.cos(data + parameters[:,0])
+        return parameters0*np.cos(data + parameters1)
+    elif mapping_relation == 'exponential':
+        return np.exp(parameters0 * data)
+    elif mapping_relation == 'log':
+        return np.log(data)
 
 
 
@@ -118,7 +141,7 @@ def mapping(data, mapping_relation='linear', parameters=[]):
 #   omega_inv: inverse of the model omega, one of the outputs of the fit_omega function   
 #   mapping_relation: 'None', 'linear', 'power_law', 'cosine'. Or a list of these to be applied in sequence to the linear model,
 #   in the same fashion as was done in the model fitting procedure. Parameters must be provided for all these transformation.
-#   'linear' and 'cosine' require two parameters for each voxel. (intercept and slope for linear), (phase and amplitude for cosine)
+#   'linear' and 'cosine' require two parameters for each voxel. (slope and intercept for linear), (amplitude and phase for cosine)
 #   returns            
 #   -log_likelihood of the hypothesized stimulus being produced by the observed bold signal (or viceversa)        
 ############################################################################################################################################
@@ -133,7 +156,7 @@ def calculate_bold_loglikelihood(   stimulus,
 
     const=-0.5*(logdet[1]+omega_inv.shape[0]*np.log(2*np.pi))
 
-    linear_predictor = np.dot(W.T,stimulus)
+    linear_predictor = np.dot(W,stimulus)
 
     # possible mappings to implement nonlinear transformation
     if mapping_relation != None:
@@ -159,9 +182,9 @@ def maximize_loglikelihood( starting_value,
                             bold,
                             logdet,
                             omega_inv,                            
-                            mapping_relation=None,
-                            mapping_parameters=[]):
-    bnds=[(0,1) for elem in W]
+                            mapping_relation,
+                            mapping_parameters):
+    bnds=[(0,1) for elem in starting_value]
 
     final_result=sp.optimize.minimize(
                                     calculate_bold_loglikelihood, 

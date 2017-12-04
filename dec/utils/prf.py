@@ -75,13 +75,13 @@ def setup_data_from_h5(data_file,
 
     # rescale the data
     #sign=np.sign(train_data)
-    train_data -= prf_cv_fold_data[:, 5, np.newaxis]
-    train_data /= prf_cv_fold_data[:, 4, np.newaxis]
+    #train_data -= prf_cv_fold_data[:, 5, np.newaxis]
+    #train_data /= prf_cv_fold_data[:, 4, np.newaxis]
     #train_data = sign * np.abs(train_data)**(1.0/prf_cv_fold_data[:, 3, np.newaxis])
 
 
-    test_data -= prf_cv_fold_data[:, 5, np.newaxis]
-    test_data /= prf_cv_fold_data[:, 4, np.newaxis]
+    #test_data -= prf_cv_fold_data[:, 5, np.newaxis]
+    #test_data /= prf_cv_fold_data[:, 4, np.newaxis]
 
     ############################################################################################################################################
     #   setting up prf timecourses - NOTE, this is for the 'all' situation, so should be really done on a run-by-run basis using a run's 
@@ -128,20 +128,22 @@ def setup_data_from_h5(data_file,
                                         deg_y)
     
     #this step is used in the css model
-    rfs /= ((2 * np.pi * prf_data[rsq_mask_crossv, cv_fold, 2]**2) * 1 /np.diff(css_model.stimulus.deg_x[0, 0:2])**2)
+    rfs_normal = rfs / ((2 * np.pi * prf_data[rsq_mask_crossv, cv_fold, 2]**2) * 1 /np.diff(css_model.stimulus.deg_x[0, 0:2])**2)
     #rfs **= prf_cv_fold_data[:, 3]
 
     # convert to 1D array and mask with circular mask
+    rfs_normal = rfs_normal.reshape((np.prod(mask.shape),-1))[mask.ravel(),:]
     rfs = rfs.reshape((np.prod(mask.shape),-1))[mask.ravel(),:]
-    rfs **= prf_cv_fold_data[:, 3, np.newaxis].T
+    #rfs **= prf_cv_fold_data[:, 3, np.newaxis].T
     ############################################################################################################################################
     #   setting up prf spatial profiles for the decoding step, creating linear_predictor_ip
     ############################################################################################################################################
 
     # and then we try to use this:
-    W=rfs.T
-    linear_predictor_ip=np.zeros((W.shape[0], W.shape[1]+1))
-    linear_predictor_ip[:,1:]=np.copy(W)
+    W=rfs_normal.T
+    
+    #linear_predictor_ip=np.zeros((W.shape[0], W.shape[1]+1))
+    #linear_predictor_ip[:,1:]=np.copy(W)
     #do some rescalings. This affects decoding quite a lot!
     #linear_predictor_ip **= np.tile(prf_cv_fold_data[:, 3], (linear_predictor_ip.shape[1],1)).T
     # #at this point (after power raising but before multiplication/subtraction) the css model convolves with hrf.
@@ -150,38 +152,46 @@ def setup_data_from_h5(data_file,
 
 
 
-
-
-
     ############################################################################################################################################
-    #   create covariances and stuff for omega fitting
+    #   no convolution simple prediction. use to test difference between CSS model (time dependent)
+    #   and respective nonlinear, time-independent model that we use in decoding ("simple prediction")
     ############################################################################################################################################
 
-    simple_prediction= np.dot(rfs.T, dm_crossv.reshape((np.prod(mask.shape),-1))[mask.ravel(),:])
-    #simple_prediction **= prf_cv_fold_data[:, 3, np.newaxis]
+    simple_prediction= np.dot(rfs_normal.T, dm_crossv.reshape((np.prod(mask.shape),-1))[mask.ravel(),:])
+    simple_prediction **= prf_cv_fold_data[:, 3, np.newaxis]
     
     
+    hrf = css_model.hrf_model(css_model.hrf_delay, css_model.stimulus.tr_length)
+    
+    #for i in range(simple_prediction.shape[0]):
+       
+        #a=np.max(simple_prediction[i,:])
+        
+        #simple_prediction[i,:] = fftconvolve(simple_prediction[i,:], hrf)[0:simple_prediction.shape[1]]
+        #simple_prediction[i,:] -= savgol_filter(simple_prediction[i,:], window_length=css_model.sg_filter_window_length, polyorder=css_model.sg_filter_order,
+        #                              deriv=0, mode='nearest')
+        
+    
+    simple_prediction *= prf_cv_fold_data[:, 4, np.newaxis]
+    simple_prediction += prf_cv_fold_data[:, 5, np.newaxis] 
     
     css_prediction=np.zeros((rsq_mask_crossv.sum(),train_data.shape[1]))
     for g, vox_prf_pars in enumerate(prf_cv_fold_data):
         css_prediction[g] = css_model.generate_prediction(
-            x=vox_prf_pars[0], y=vox_prf_pars[1], sigma=vox_prf_pars[2], n=vox_prf_pars[3], beta=1, baseline=0)
-
+            x=vox_prf_pars[0], y=vox_prf_pars[1], sigma=vox_prf_pars[2], n=vox_prf_pars[3], beta=vox_prf_pars[4], baseline=vox_prf_pars[5])
+        #b=np.max(css_prediction[g,:])
+        #simple_prediction[:,g] *= b/a
+        
     all_residuals_css = train_data - css_prediction
     all_residuals_simple = train_data - simple_prediction
+    print("Shapiro-Wilk normality test (if second value is large, residuals are normal):", sp.stats.shapiro(all_residuals_css))
     print("CSS resid: ",np.sum(all_residuals_css))
+    print("simple model (no hrf) resid: ",np.sum(all_residuals_simple))
 
-    hrf = css_model.hrf_model(css_model.hrf_delay, css_model.stimulus.tr_length)
-    #for i in range(simple_prediction.shape[0]):
-    #    print(i)
-    #    a=np.max(simple_prediction[i,:])
-    #    simple_prediction[i,:] = fftconvolve(simple_prediction[i,:], hrf)[0:simple_prediction.shape[1]]
-    #    simple_prediction[i,:] -= savgol_filter(simple_prediction[i,:], window_length=css_model.sg_filter_window_length, polyorder=css_model.sg_filter_order,
-    #                                  deriv=0, mode='nearest')
+    
     
     #    print(np.max(simple_prediction[i,:])/a)
-    #simple_prediction *= prf_cv_fold_data[:, 4, np.newaxis]
-    #simple_prediction += prf_cv_fold_data[:, 5, np.newaxis]
+    
     
     # some quick visualization
     f = pl.figure(figsize=(17,5))
@@ -203,10 +213,10 @@ def setup_data_from_h5(data_file,
     
     
     
-    stimulus_covariance_WW = np.dot(rfs.T,rfs)
+    
     all_residual_covariance_css = np.cov(all_residuals_css) 
 
-    return prf_cv_fold_data, rfs, linear_predictor_ip, all_residuals_css, all_residual_covariance_css, stimulus_covariance_WW, test_data, mask
+    return prf_cv_fold_data, W, all_residuals_css, all_residual_covariance_css, test_data, mask
 
 
 def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, extent, screen_distance, screen_width, TR, mask_name, **kwargs):
