@@ -58,6 +58,7 @@ def firstpass_decoder_independent_channels( W,
     #1 extra column for empty screen baseline
     non_linear_predictor_independent_channels =  np.zeros((W.shape[0], W.shape[1]+1))
     non_linear_predictor_independent_channels[:,1:]=np.copy(W)
+    
     # possible mappings to implement nonlinear transformation
     if mapping_relation != None:
         if type(mapping_relation) == list:         
@@ -66,7 +67,7 @@ def firstpass_decoder_independent_channels( W,
         else:
             non_linear_predictor_independent_channels = mapping(non_linear_predictor_independent_channels, mapping_relation=mapping_relation, parameters=mapping_parameters)
             
-
+        
     # difference between bold response and linear predictor is residuals
     resid=np.tile(bold,(non_linear_predictor_independent_channels.shape[1],1)).T-non_linear_predictor_independent_channels
 
@@ -75,7 +76,7 @@ def firstpass_decoder_independent_channels( W,
     
     # all ll relative to 0, the empty screen
     baseline=log_likelihood_indep_Ws[0]
-
+    
     # firstpass_image=np.reshape(baseline/log_likelihood_indep_pixels[1:],(mask.shape[0],mask.shape[1]))
     firstpass_image=baseline/log_likelihood_indep_Ws[1:]
 

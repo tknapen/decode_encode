@@ -130,8 +130,18 @@ def setup_data_from_h5(data_file,
     #this step is used in the css model
     rfs_normal = rfs / ((2 * np.pi * prf_data[rsq_mask_crossv, cv_fold, 2]**2) * 1 /np.diff(css_model.stimulus.deg_x[0, 0:2])**2)
     #rfs **= prf_cv_fold_data[:, 3]
-
-    # convert to 1D array and mask with circular mask
+    
+    #WARNING: CSS-like normalisation does not work well at all. simply divide by the sum for simplicity?
+    pl.imshow(rfs[:,:,3])
+    print(np.sum(rfs_normal[:,:,0]))
+    print(np.sum(rfs_normal[:,:,1]))
+    print(np.sum(rfs_normal[:,:,2]))
+    print(np.sum(rfs_normal[:,:,3]))
+    print(np.sum(rfs_normal[:,:,4]))
+    pl.colorbar()
+    #(however in very original decoding, masking was done only at the end.i.e. W had all the pixels in the square.)
+    #shouldnt have an impact but remember to check if it does. ask tomas.
+    # convert to 1D array and mask with circular mask (tested, works)
     rfs_normal = rfs_normal.reshape((np.prod(mask.shape),-1))[mask.ravel(),:]
     rfs = rfs.reshape((np.prod(mask.shape),-1))[mask.ravel(),:]
     #rfs **= prf_cv_fold_data[:, 3, np.newaxis].T
