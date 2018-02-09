@@ -14,6 +14,7 @@ from popeye.visual_stimulus import VisualStimulus
 from .utils import roi_data_from_hdf, create_visual_designmatrix_all, get_figshare_data, create_circular_mask
 from .css import CompressiveSpatialSummationModelFiltered
 from .fit import *
+from .omega import *
 
 from tqdm import tqdm
 
@@ -132,13 +133,17 @@ def setup_data_from_h5(data_file,
     #rfs **= prf_cv_fold_data[:, 3]
     
     #WARNING: CSS-like normalisation does not work well at all. simply divide by the sum for simplicity?
-    pl.imshow(rfs[:,:,3])
-    print(np.sum(rfs_normal[:,:,0]))
-    print(np.sum(rfs_normal[:,:,1]))
-    print(np.sum(rfs_normal[:,:,2]))
-    print(np.sum(rfs_normal[:,:,3]))
-    print(np.sum(rfs_normal[:,:,4]))
-    pl.colorbar()
+    #for i in range(rfs_normal.shape[2]):
+    #    rfs_normal[:,:,i]/=np.sum(rfs_normal[:,:,i])
+        
+    #pl.imshow(rfs[:,:,3])
+    #print(np.sum(rfs_normal[:,:,0]))
+    #print(np.sum(rfs_normal[:,:,1]))
+    #print(np.sum(rfs_normal[:,:,2]))
+    #print(np.sum(rfs_normal[:,:,3]))
+    #print(np.sum(rfs_normal[:,:,4]))
+    #pl.colorbar()
+   
     #(however in very original decoding, masking was done only at the end.i.e. W had all the pixels in the square.)
     #shouldnt have an impact but remember to check if it does. ask tomas.
     # convert to 1D array and mask with circular mask (tested, works)
@@ -161,6 +166,7 @@ def setup_data_from_h5(data_file,
     #linear_predictor_ip += np.tile(prf_cv_fold_data[:, 5], (linear_predictor_ip.shape[1],1)).T
 
 
+    
 
     ############################################################################################################################################
     #   no convolution simple prediction. use to test difference between CSS model (time dependent)
@@ -169,7 +175,8 @@ def setup_data_from_h5(data_file,
 
     simple_prediction= np.dot(rfs_normal.T, dm_crossv.reshape((np.prod(mask.shape),-1))[mask.ravel(),:])
     simple_prediction **= prf_cv_fold_data[:, 3, np.newaxis]
-    
+    simple_prediction *= prf_cv_fold_data[:, 4, np.newaxis]
+    simple_prediction += prf_cv_fold_data[:, 5, np.newaxis] 
     
     hrf = css_model.hrf_model(css_model.hrf_delay, css_model.stimulus.tr_length)
     
@@ -178,12 +185,10 @@ def setup_data_from_h5(data_file,
         #a=np.max(simple_prediction[i,:])
         
         #simple_prediction[i,:] = fftconvolve(simple_prediction[i,:], hrf)[0:simple_prediction.shape[1]]
-        #simple_prediction[i,:] -= savgol_filter(simple_prediction[i,:], window_length=css_model.sg_filter_window_length, polyorder=css_model.sg_filter_order,
-        #                              deriv=0, mode='nearest')
+        #simple_prediction[i,:] -= savgol_filter(simple_prediction[i,:], window_length=css_model.sg_filter_window_length, polyorder=css_model.sg_filter_order, deriv=0, mode='nearest')
         
     
-    simple_prediction *= prf_cv_fold_data[:, 4, np.newaxis]
-    simple_prediction += prf_cv_fold_data[:, 5, np.newaxis] 
+    
     
     css_prediction=np.zeros((rsq_mask_crossv.sum(),train_data.shape[1]))
     for g, vox_prf_pars in enumerate(prf_cv_fold_data):
@@ -236,70 +241,70 @@ def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, extent,
 
 
     # set up results variables
-    cv_decoded_image, cv_reshrot_recon, cv_reshrot_recon_m, \
+    cv_rotated_recon, cv_reshrot_recon, cv_reshrot_recon_m, \
     cv_omega, cv_estimated_tau_matrix, \
-    cv_estimated_rho, cv_estimated_sigma = [], [], [], [], [], [], []
+    cv_estimated_rho, cv_estimated_sigma, cv_estimated_alpha = [], [], [], [], [], [], [], []
 
     for i in tqdm(range(n_folds)):
         # get the data
-        (prf_cv_fold_data, rfs, linear_predictor_ip, 
-         all_residuals_css, all_residual_covariance_css, 
-         stimulus_covariance_WW, test_data, mask) = setup_data_from_h5(
-                                data_file = data_file, 
-                                n_pix=n_pix, 
-                                extent=extent, 
-                                screen_distance=screen_distance, 
-                                screen_width=screen_width, 
-                                rsq_threshold=rsq_threshold,
-                                TR=TR,
-                                cv_fold=i,
-                                n_folds=n_folds,
-                                use_median=False,
-                                mask_name=mask_name)
+     
+        
+        (prf_cv_fold_data, W, 
+         all_residuals_css, all_residual_covariance_css, test_data, mask) = setup_data_from_h5(
+                        data_file = data_file, 
+                        n_pix=n_pix, 
+                        extent=extent, 
+                        screen_distance=screen_distance, 
+                        screen_width=screen_width, 
+                        rsq_threshold=rsq_threshold,
+                        TR=TR,
+                        cv_fold=i,
+                        n_folds=n_folds,
+                        use_median=False,
+                        mask_name=mask_name)
 
         # estimate the covariance structure, which outputs all parameters
         (estimated_tau_matrix, estimated_rho, 
-         estimated_sigma, omega, 
-         omega_inv, logdet) = fit_model_omega(
-                                        observed_residual_covariance=all_residual_covariance_css, 
-                                        featurespace_covariance=stimulus_covariance_WW,
-                                        verbose=1
+         estimated_sigma, estimated_alpha, omega, omega_inv, logdet) = fit_model_omega(observed_residual_covariance=all_residual_covariance_css, 
+                                        WWT=np.dot(W,W.T),
+                                        verbose=0,
+                                 #       infile='../data/omega.npy'
                                         )
 
          # set up result array:
+        # set up result array:
         dm_pixel_logl_ratio = np.zeros((mask.sum(),test_data.shape[1]))
 
         # and loop across timepoints
         for t, bold in enumerate(test_data.T):
-            dm_pixel_logl_ratio[:,t] = firstpass_decoder_independent_Ws(
-                                                bold=bold, 
-                                                logdet=logdet,
-                                                omega_inv=omega_inv,
-                                                linear_predictor_ip=linear_predictor_ip)
-
-        decoded_image = np.zeros((mask.sum(),test_data.shape[1]))  
-        for t, bold in enumerate(test_data.T):
-        # for t, bold in enumerate(tqdm(test_data.T)):
+            dm_pixel_logl_ratio[:,t] = firstpass_decoder_independent_channels(
+                                        W=W,
+                                        bold=bold, 
+                                        logdet=logdet,
+                                        omega_inv=omega_inv,                                        
+                                        mapping_relation=['power_law','linear'],
+                                        mapping_parameters=[prf_cv_fold_data[:, 3],prf_cv_fold_data[:,4:6]]
+                                        #mapping_relation='power_law',
+                                        #mapping_parameters=prf_cv_fold_data[:, 3]
+                                        )
             
-            starting_value=dm_pixel_logl_ratio[:,t]
-            prf_data=prf_cv_fold_data
-            bnds=[(0,1) for elem in rfs]
+            
+        decoded_image = np.zeros((mask.sum(),test_data.shape[1]))  
+        for t, bold in enumerate(tqdm(test_data.T)):
+    
 
+            logl, decoded_image[:,t] = maximize_loglikelihood( starting_value=dm_pixel_logl_ratio[:,t],
+                            W=W,                           
+                            bold=bold,
+                            logdet=logdet,
+                            omega_inv=omega_inv,                            
+                            mapping_relation = ['power_law', 'linear'],
+                            mapping_parameters = [prf_cv_fold_data[:, 3],prf_cv_fold_data[:,4:6]]
+                            #mapping_relation='power_law',
+                            #mapping_parameters=prf_cv_fold_data[:, 3]
+                                                     )    
 
-            final_result=sp.optimize.minimize(
-                                            calculate_bold_loglikelihood, 
-                                            starting_value, 
-                                            args=(  rfs,
-                                                    prf_data, 
-                                                    logdet, 
-                                                    omega_inv, 
-                                                    bold), 
-                                            method='L-BFGS-B', 
-                                            bounds=bnds,
-                                            tol=1e-02,
-                                            options={'disp':False})
-            decoded_image[:,t] = final_result.x
-            logl = -final_result.fun
+     
 
         # fill in the mask
         recon = np.zeros([decoded_image.shape[1]]+list(mask.shape) )
@@ -327,29 +332,35 @@ def decode_cv_prfs(n_pix, rsq_threshold, use_median, n_folds, data_file, extent,
                 bar_counter += 1
 
         reshrot_recon_m = np.median(reshrot_recon, axis=0)
-
+        rotated_recon_m = np.median(rotated_recon, axis=0)
+        pl.figure(figsize=(24,7))
+        pl.imshow(rotated_recon_m);
+        pl.figure(figsize=(12,6))
+        pl.imshow(np.median(reshrot_recon_m, axis = 0), aspect = 0.5);
         ##############################
         #   Save out results
         ##############################
 
-        cv_decoded_image.append(decoded_image)
+        cv_rotated_recon.append(rotated_recon_m)
         cv_reshrot_recon.append(reshrot_recon)
         cv_reshrot_recon_m.append(reshrot_recon_m)
         cv_omega.append(omega)
         cv_estimated_tau_matrix.append(estimated_tau_matrix)
         cv_estimated_rho.append(estimated_rho)
         cv_estimated_sigma.append(estimated_sigma)
+        cv_estimated_alpha.append(estimated_alpha)
 
 
-    cv_decoded_image = np.array(cv_decoded_image)
+    cv_rotated_recon = np.array(cv_rotated_recon)
     cv_reshrot_recon = np.array(cv_reshrot_recon)
     cv_reshrot_recon_m = np.array(cv_reshrot_recon_m)
     cv_omega = np.array(cv_omega)
     cv_estimated_tau_matrix = np.array(cv_estimated_tau_matrix)
     cv_estimated_rho = np.array(cv_estimated_rho)
     cv_estimated_sigma = np.array(cv_estimated_sigma)
+    cv_estimated_alpha = np.array(cv_estimated_alpha)
 
-    return cv_decoded_image, cv_reshrot_recon, cv_reshrot_recon_m, cv_omega, cv_estimated_tau_matrix, cv_estimated_rho, cv_estimated_sigma
+    return cv_rotated_recon, cv_reshrot_recon, cv_reshrot_recon_m, cv_omega, cv_estimated_tau_matrix, cv_estimated_rho, cv_estimated_sigma, cv_estimated_alpha
 
 
 #   0%|          | 0/6 [00:00<?, ?it/s]

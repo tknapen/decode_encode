@@ -34,11 +34,11 @@ def fit_model_omega(observed_residual_covariance, WWT, D=None, infile=None, outf
     else:   # initial guesses around Van Bergen values
         initial_guesses = 2
         x0=np.zeros((observed_residual_covariance.shape[0]+3,initial_guesses))
-        x0[0,:] = 0.5 #alpha
-        x0[1,:] = 0.1 # rho
-        x0[2,:] = 0.3 # sigma
-        x0[3:,:] = 0.7 * np.ones((observed_residual_covariance.shape[0], initial_guesses)) + \
-                0.1 * np.random.randn( observed_residual_covariance.shape[0], initial_guesses)
+        x0[0,:] = 0.0 #alpha
+        x0[1,:] = 0.2 # rho
+        x0[2,:] = 7.5 # sigma
+        x0[3:,:] = 0.5 * np.ones((observed_residual_covariance.shape[0], initial_guesses)) + \
+                0.2 * np.random.randn( observed_residual_covariance.shape[0], initial_guesses)
 #        x0[2:,:] = np.zeros((observed_residual_covariance.shape[0], initial_guesses))
 
     

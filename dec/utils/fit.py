@@ -183,8 +183,8 @@ def maximize_loglikelihood( starting_value,
                             bold,
                             logdet,
                             omega_inv,                            
-                            mapping_relation,
-                            mapping_parameters):
+                            mapping_relation=None,
+                            mapping_parameters=[]):
     bnds=[(0,1) for elem in starting_value]
 
     final_result=sp.optimize.minimize(
@@ -198,7 +198,7 @@ def maximize_loglikelihood( starting_value,
                                             mapping_parameters), 
                                     method='L-BFGS-B', 
                                     bounds=bnds,
-                                    tol=1e-01,
+                                    tol=1e-02,
                                     options={'disp':True})
     decoded_stimulus = final_result.x
     logl = -final_result.fun
