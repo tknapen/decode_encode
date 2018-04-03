@@ -149,8 +149,8 @@ def roi_data_from_hdf(data_types_wildcards, roi_name_wildcard, hdf5_file, folder
                   ' in group /' + folder_alias + '/' + roi_name)
             pass
         else:
-            print('Taking data corresponding to ' + str(selected_data_array_names) +
-                  ' from group /' + folder_alias + '/' + roi_name)
+#            print('Taking data corresponding to ' + str(selected_data_array_names) +
+#                  ' from group /' + folder_alias + '/' + roi_name)
             data_arrays.append([])
             for dan in selected_data_array_names:
                 data_arrays[-1].append(
@@ -167,6 +167,8 @@ def roi_data_from_hdf(data_types_wildcards, roi_name_wildcard, hdf5_file, folder
 
 
 def get_figshare_data(localpath = 'data/V1.h5', remotepath='https://ndownloader.figshare.com/files/9183091'):
+    '''New location of the data is https://ndownloader.figshare.com/articles/5400205/versions/1
+    '''
     if os.path.isfile(localpath):
         print('data file found, returning local file %s'%localpath)
         pass 
@@ -178,3 +180,18 @@ def get_figshare_data(localpath = 'data/V1.h5', remotepath='https://ndownloader.
             pass
         urllib.request.urlretrieve(remotepath, localpath)
     return localpath
+
+def create_circular_mask(h, w, center=None, radius=None):
+
+    if center is None: # use the middle of the image
+        center = [int(w/2), int(h/2)]
+    if radius is None: # use the smallest distance between the center and image walls
+        radius = min(center[0], center[1], w-center[0], h-center[1])
+
+    Y, X = np.ogrid[:h, :w]
+    dist_from_center = np.sqrt((X - center[0])**2 + (Y-center[1])**2)
+
+    mask = dist_from_center <= radius
+    return mask
+
+    
