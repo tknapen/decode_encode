@@ -20,7 +20,7 @@ numpy, scipy, lmfit, popeye, pytables, hrf_estimation
 5. "Firstpass" independent-pixels decoder to avoid combinatorial explosion and prior-bias. 
 6. Standard LL minimization to obtain best available (time-independent) decoding.
 
-###TODO
+## TODO
 Handle time dependency
 
 
