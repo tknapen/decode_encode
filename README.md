@@ -4,7 +4,7 @@ This repo contains code to optimally decode stimulus features from a previously 
 
 The first use-case is for the reconstruction of visual images from brain activations after population receptive field mapping of these voxels. 
 
-![barpass image](img/barpass.gif)
+![barpass image](dec/img/barpass.gif)
 
 
 ## requirements
