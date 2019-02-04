@@ -2,7 +2,7 @@
 
 This repo contains code to optimally decode stimulus features from a previously fit encoding model. 
 
-The first use-case is for the reconstruction of visual images from brain activations after population receptive field mapping of these voxels. 
+The first use-case is for the reconstruction of visual images from brain activations after population receptive field mapping of these voxels. For example, this is a movie of a bar stimulus traversal, decoded from V2. 
 
 ![barpass image](dec/img/barpass.gif)
 
